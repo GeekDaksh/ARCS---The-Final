@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARCS Phase 2 — Engagement Analysis</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --navy:#0a0e1a; --panel:#0e1626; --panel2:#0b1220; --line:#1c2a44;
+    --cyan:#00e5ff; --green:#36f08a; --orange:#ff9f1c; --ink:#cfe3f7;
+    --muted:#6f8bb0; --red:#ff4d5e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--navy);color:var(--ink);
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+  h1,h2,h3{margin:0;font-weight:600;letter-spacing:.04em}
+  .wrap{max-width:1320px;margin:0 auto;padding:18px}
+  header{display:flex;align-items:center;justify-content:space-between;
+    border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:14px}
+  header h1{font-size:18px;color:#eaf4ff}
+  header h1 small{color:var(--cyan);font-weight:400}
+  .state{display:flex;align-items:center;gap:14px}
+  .phase-badge{padding:5px 12px;border:1px solid var(--line);border-radius:14px;
+    background:var(--panel2);font-size:12px;letter-spacing:.08em}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:var(--muted);margin-right:7px;vertical-align:middle}
+  .dot.ok{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .dot.off{background:var(--red);box-shadow:0 0 8px var(--red)}
+
+  .offline{display:none;background:rgba(255,77,94,.12);border:1px solid var(--red);
+    color:#ffd2d6;padding:10px 14px;border-radius:8px;margin-bottom:14px}
+  .offline.show{display:block}
+
+  /* controls */
+  .controls{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px;margin-bottom:14px}
+  .ctl{display:flex;flex-direction:column;gap:5px}
+  .ctl label{color:var(--muted);font-size:11px;letter-spacing:.05em}
+  .ctl input{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+    border-radius:6px;padding:7px 8px;font-family:inherit;font-size:13px}
+  .ctl input:focus{outline:none;border-color:var(--cyan)}
+  .runbar{grid-column:1/-1;display:flex;align-items:center;gap:14px;
+    border-top:1px solid var(--line);padding-top:12px;margin-top:2px}
+  button.run{background:linear-gradient(180deg,#0596b8,#046c86);color:#eaffff;
+    border:1px solid var(--cyan);border-radius:8px;padding:10px 22px;
+    font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:.05em}
+  button.run:hover{background:linear-gradient(180deg,#07b6dd,#0596b8)}
+  button.run:disabled{opacity:.5;cursor:default}
+  .hint{color:var(--muted);font-size:11px}
+
+  /* headline */
+  .headline{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:14px;margin-bottom:14px}
+  .hcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .hcard .k{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  .hcard .v{font-size:38px;font-weight:700;line-height:1.1;margin-top:6px}
+  .hcard .v small{font-size:15px;color:var(--muted);font-weight:400}
+  .hcard.cep .v{color:var(--green)}
+  .hcard .sub{color:var(--muted);font-size:11px;margin-top:6px}
+
+  /* grid of 4 views */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .panel h3{font-size:12px;color:#bfe7ff;letter-spacing:.08em;text-transform:uppercase;
+    margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+  .panel h3 .legend{font-size:10px;color:var(--muted);font-weight:400;letter-spacing:.02em}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin:0 4px 0 10px;vertical-align:middle}
+  svg{width:100%;display:block}
+  .lvt{width:100%;border-collapse:collapse;font-size:13px}
+  .lvt th{color:var(--muted);font-weight:500;text-align:right;padding:7px 8px;
+    border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.04em}
+  .lvt th:first-child{text-align:left}
+  .lvt td{padding:8px;border-bottom:1px solid #142036;text-align:right}
+  .lvt td:first-child{text-align:left;color:var(--muted)}
+  .lvt .est{color:var(--cyan)}
+  .lvt .true{color:#eaf4ff}
+  .lvt .match{color:var(--green)}
+  .matchpill{font-size:10px;padding:2px 7px;border-radius:10px;border:1px solid var(--green);
+    color:var(--green);background:rgba(54,240,138,.08)}
+  details{margin-top:12px}
+  details summary{cursor:pointer;color:var(--muted);font-size:11px;letter-spacing:.05em}
+  .shots{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+  .shots th,.shots td{padding:5px 8px;text-align:right;border-bottom:1px solid #142036}
+  .shots th{color:var(--muted);font-weight:500}
+  .tag{font-size:10px;padding:1px 6px;border-radius:8px}
+  .tag.REGISTRATION{color:var(--orange);border:1px solid var(--orange)}
+  .tag.ADJUSTMENT{color:var(--cyan);border:1px solid var(--cyan)}
+  .tag.FFE{color:var(--green);border:1px solid var(--green)}
+  .axislbl{fill:var(--muted);font-size:10px}
+  .gridline{stroke:#142036;stroke-width:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ARCS <small>// Phase 2 Engagement Analysis</small></h1>
+    <div class="state">
+      <span class="phase-badge" id="phaseBadge">PHASE — IDLE</span>
+      <span><span class="dot" id="beDot"></span><span id="beTxt" class="hint">checking backend…</span></span>
+    </div>
+  </header>
+
+  <div class="offline" id="offline">⚠ Backend offline — start <code>python arcs_server.py</code> and reload. No data is fabricated.</div>
+
+  <!-- CONTROLS -->
+  <div class="controls">
+    <div class="ctl"><label>Target range (m)</label><input id="target_range" type="number" value="22000" step="500"></div>
+    <div class="ctl"><label>Target bearing (°)</label><input id="target_bearing" type="number" value="0" step="5"></div>
+    <div class="ctl"><label>Told wind dir (°)</label><input id="told_wind_dir" type="number" value="180" step="5"></div>
+    <div class="ctl"><label>Told wind speed (m/s)</label><input id="told_wind_speed" type="number" value="20" step="1"></div>
+    <div class="ctl"><label>True wind dir (°)</label><input id="true_wind_dir" type="number" value="180" step="5"></div>
+    <div class="ctl"><label>True wind speed (m/s)</label><input id="true_wind_speed" type="number" value="23" step="1"></div>
+    <div class="ctl"><label>Gun bias — downrange (m)</label><input id="gun_bias_dr" type="number" value="200" step="10"></div>
+    <div class="ctl"><label>Gun bias — cross (m)</label><input id="gun_bias_cr" type="number" value="80" step="10"></div>
+    <div class="runbar">
+      <button class="run" id="runBtn">▶ RUN ENGAGEMENT</button>
+      <span class="hint" id="runHint">Tell the computer a wrong wind &amp; give the gun a hidden bias — watch it learn both from misses.</span>
+    </div>
+  </div>
+
+  <!-- HEADLINE (visual hierarchy: the result first) -->
+  <div class="headline">
+    <div class="hcard cep">
+      <div class="k">Final CEP — Fire For Effect</div>
+      <div class="v" id="cepVal">— <small>m</small></div>
+      <div class="sub" id="cepSub">run an engagement to begin</div>
+    </div>
+    <div class="hcard">
+      <div class="k">Opening miss → converged</div>
+      <div class="v" id="convVal">—</div>
+      <div class="sub" id="convSub">first registration shot vs FFE</div>
+    </div>
+    <div class="hcard">
+      <div class="k">Rounds to converge</div>
+      <div class="v" id="rtcVal">—</div>
+      <div class="sub" id="rtcSub">register + adjust before FFE</div>
+    </div>
+  </div>
+
+  <!-- FOUR VIEWS -->
+  <div class="grid">
+    <!-- 1. trajectory arc -->
+    <div class="panel">
+      <h3>Trajectory · side-on (downrange × altitude)
+        <span class="legend">shaded = MET atmosphere zones</span></h3>
+      <svg id="arc" viewBox="0 0 600 300" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <!-- 2. beaten zone -->
+    <div class="panel">
+      <h3>Beaten zone · top-down (downrange × cross)
+        <span class="legend"><i style="background:var(--orange)"></i>reg<i style="background:var(--cyan)"></i>adj<i style="background:var(--green)"></i>ffe</span></h3>
+      <svg id="beaten" viewBox="0 0 600 300" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <!-- 3. convergence -->
+    <div class="panel">
+      <h3>Convergence · miss per round
+        <span class="legend">headline analysis</span></h3>
+      <canvas id="convChart" height="220"></canvas>
+    </div>
+    <!-- 4. learned vs true -->
+    <div class="panel">
+      <h3>Learned vs hidden truth
+        <span class="legend">it was told NONE of this</span></h3>
+      <table class="lvt">
+        <thead><tr><th>Quantity</th><th>Estimated</th><th>Hidden truth</th><th>Δ</th></tr></thead>
+        <tbody id="lvtBody">
+          <tr><td>Gun bias · downrange</td><td class="est">—</td><td class="true">—</td><td>—</td></tr>
+          <tr><td>Gun bias · cross</td><td class="est">—</td><td class="true">—</td><td>—</td></tr>
+          <tr><td>Wind error · downrange</td><td class="est">—</td><td class="true">—</td><td>—</td></tr>
+          <tr><td>Wind error · cross</td><td class="est">—</td><td class="true">—</td><td>—</td></tr>
+        </tbody>
+      </table>
+      <details>
+        <summary>▸ per-shot detail</summary>
+        <table class="shots"><thead><tr><th>#</th><th>phase</th><th>downrange</th><th>cross</th><th>miss (m)</th></tr></thead>
+        <tbody id="shotsBody"></tbody></table>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script>
+const PHASE_COLOR = {REGISTRATION:'#ff9f1c', ADJUSTMENT:'#00e5ff', FFE:'#36f08a'};
+const MET_ZONES = [0,200,500,1000,1500,2000,3000,4000,5000,6000,8000,10000,12000];
+let convChart = null;
+
+const $ = id => document.getElementById(id);
+function setOffline(off){
+  $('offline').classList.toggle('show', off);
+  $('beDot').className = 'dot ' + (off ? 'off' : 'ok');
+  $('beTxt').textContent = off ? 'backend offline' : 'backend online';
+}
+
+async function checkBackend(){
+  try{ const r = await fetch('/api/status'); setOffline(!r.ok); }
+  catch(e){ setOffline(true); }
+}
+
+async function runEngagement(){
+  const body = {
+    weapon_id:'HOW-VIEW',
+    target_range:+$('target_range').value, target_bearing:+$('target_bearing').value,
+    told_wind_dir:+$('told_wind_dir').value, told_wind_speed:+$('told_wind_speed').value,
+    true_wind_dir:+$('true_wind_dir').value, true_wind_speed:+$('true_wind_speed').value,
+    gun_bias_dr:+$('gun_bias_dr').value, gun_bias_cr:+$('gun_bias_cr').value
+  };
+  $('runBtn').disabled = true; $('phaseBadge').textContent = 'PHASE — COMPUTING…';
+  let eng;
+  try{
+    const r = await fetch('/api/p2/engagement', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(!r.ok) throw new Error('http '+r.status);
+    eng = await r.json();
+  }catch(err){ setOffline(true); $('runBtn').disabled=false; $('phaseBadge').textContent='PHASE — IDLE'; return; }
+  setOffline(false);
+
+  // trajectory arc: real arc at the firing elevation under the TOLD wind
+  let traj=null;
+  try{
+    const tr = await fetch('/api/p2/trajectory', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({v0:827, elevation:eng.elevation_deg, azimuth:0,
+        wind_dir:body.told_wind_dir, wind_speed:body.told_wind_speed})});
+    if(tr.ok) traj = await tr.json();
+  }catch(e){ traj=null; }
+
+  renderHeadline(eng);
+  if(traj) drawArc(traj, eng); else $('arc').innerHTML='';
+  drawBeaten(eng);
+  drawConvergence(eng);
+  fillLearned(eng);
+  $('phaseBadge').textContent = 'PHASE — FIRE FOR EFFECT ✓';
+  $('runBtn').disabled = false;
+}
+
+function renderHeadline(e){
+  $('cepVal').innerHTML = e.final_cep.toFixed(1) + ' <small>m</small>';
+  const reg0 = e.phase_misses.REGISTRATION[0];
+  $('cepSub').textContent = 'median radial error of the mission rounds';
+  $('convVal').innerHTML = Math.round(reg0) + ' <small>m</small> → ' + e.final_cep.toFixed(1) + ' <small>m</small>';
+  const factor = e.final_cep>0 ? (reg0/e.final_cep) : 0;
+  $('convSub').textContent = factor.toFixed(0) + '× tighter after learning';
+  $('rtcVal').textContent = e.rounds_to_converge;
+  $('rtcSub').textContent = e.total_shots + ' shots total · ' + (e.warm_started?'warm start':'cold start');
+}
+
+/* ---- 1. Trajectory arc with atmospheric bands ---- */
+function drawArc(t, e){
+  const W=600,H=300, mL=46,mR=14,mT=12,mB=26;
+  const pw=W-mL-mR, ph=H-mT-mB;
+  const xmax = Math.max(t.range_m, e.target_range)*1.04;
+  const zmax = Math.max(t.apex_m*1.28, 1000);
+  const X = x => mL + (x/xmax)*pw;
+  const Y = z => mT + ph - (z/zmax)*ph;
+  let s = '';
+  // atmospheric zone bands
+  const zones = MET_ZONES.filter(z=>z<=zmax);
+  for(let i=0;i<zones.length;i++){
+    const z0=zones[i], z1=(i+1<zones.length)?zones[i+1]:zmax;
+    if(z0>zmax) break;
+    const yTop=Y(Math.min(z1,zmax)), yBot=Y(z0);
+    const shade = i%2===0 ? 'rgba(0,229,255,0.05)' : 'rgba(0,229,255,0.025)';
+    s += `<rect x="${mL}" y="${yTop}" width="${pw}" height="${yBot-yTop}" fill="${shade}"/>`;
+    s += `<line class="gridline" x1="${mL}" y1="${yBot}" x2="${mL+pw}" y2="${yBot}"/>`;
+    if(z0>0) s += `<text class="axislbl" x="${mL-6}" y="${yBot+3}" text-anchor="end">${z0>=1000?(z0/1000)+'k':z0}</text>`;
+  }
+  s += `<text class="axislbl" x="${mL-6}" y="${Y(0)+3}" text-anchor="end">0</text>`;
+  // arc polyline (downrange vs altitude)
+  const pts = t.points.map(p=>`${X(p[0])},${Y(p[2])}`).join(' ');
+  s += `<polyline points="${pts}" fill="none" stroke="#36f08a" stroke-width="2.2"/>`;
+  // gun, apex, target
+  s += `<circle cx="${X(0)}" cy="${Y(0)}" r="4" fill="#00e5ff"/>`;
+  s += `<text class="axislbl" x="${X(0)+6}" y="${Y(0)-6}" fill="#00e5ff">gun</text>`;
+  const apex = t.points.reduce((a,p)=>p[2]>a[2]?p:a,[0,0,0]);
+  s += `<circle cx="${X(apex[0])}" cy="${Y(apex[2])}" r="3" fill="#ff9f1c"/>`;
+  s += `<text class="axislbl" x="${X(apex[0])}" y="${Y(apex[2])-7}" text-anchor="middle" fill="#ff9f1c">apex ${Math.round(t.apex_m)} m</text>`;
+  s += `<circle cx="${X(e.target_range)}" cy="${Y(0)}" r="4" fill="none" stroke="#ff4d5e" stroke-width="2"/>`;
+  s += `<text class="axislbl" x="${X(e.target_range)}" y="${Y(0)+16}" text-anchor="middle" fill="#ff4d5e">target</text>`;
+  // x axis ticks
+  for(let k=0;k<=4;k++){ const xv=xmax*k/4; s+=`<text class="axislbl" x="${X(xv)}" y="${H-8}" text-anchor="middle">${(xv/1000).toFixed(0)} km</text>`; }
+  s += `<text class="axislbl" x="${mL-38}" y="${mT+8}" transform="rotate(0)">alt m</text>`;
+  $('arc').innerHTML = s;
+}
+
+/* ---- 2. Beaten-zone top-down ---- */
+function drawBeaten(e){
+  const W=600,H=300, cx=W/2, cy=H/2;
+  const pts = e.history.map(h=>h.miss);
+  let m = 30;
+  pts.forEach(p=>{ m=Math.max(m, Math.abs(p[0]), Math.abs(p[1])); });
+  m *= 1.25;
+  const sc = (Math.min(W,H)/2 - 24)/m;
+  let s='';
+  // range rings
+  [0.33,0.66,1.0].forEach(f=>{ s+=`<circle cx="${cx}" cy="${cy}" r="${f*m*sc}" fill="none" stroke="#142036"/>`;
+    s+=`<text class="axislbl" x="${cx+f*m*sc-2}" y="${cy-4}" text-anchor="end">${Math.round(f*m)}m</text>`; });
+  // crosshair / target
+  s+=`<line class="gridline" x1="${cx-m*sc}" y1="${cy}" x2="${cx+m*sc}" y2="${cy}"/>`;
+  s+=`<line class="gridline" x1="${cx}" y1="${cy-m*sc}" x2="${cx}" y2="${cy+m*sc}"/>`;
+  s+=`<circle cx="${cx}" cy="${cy}" r="5" fill="none" stroke="#ff4d5e" stroke-width="2"/>`;
+  s+=`<text class="axislbl" x="${cx+8}" y="${cy+14}" fill="#ff4d5e">target</text>`;
+  s+=`<text class="axislbl" x="${cx}" y="18" text-anchor="middle">+ downrange →</text>`;
+  s+=`<text class="axislbl" x="14" y="${cy-6}">← cross →</text>`;
+  // shots: downrange = +x to the right, cross = +y upward
+  e.history.forEach(h=>{
+    const px = cx + h.miss[0]*sc, py = cy - h.miss[1]*sc;
+    const c = PHASE_COLOR[h.phase];
+    s+=`<circle cx="${px}" cy="${py}" r="4.5" fill="${c}" fill-opacity="0.85" stroke="#0a0e1a" stroke-width="0.8"><title>#${h.round} ${h.phase} ${h.radial.toFixed(1)}m</title></circle>`;
+  });
+  $('beaten').innerHTML = s;
+}
+
+/* ---- 3. Convergence chart ---- */
+function drawConvergence(e){
+  const labels = e.history.map(h=>h.round);
+  const data = e.history.map(h=>h.radial);
+  const colors = e.history.map(h=>PHASE_COLOR[h.phase]);
+  const cep = e.final_cep;
+  if(convChart) convChart.destroy();
+  convChart = new Chart($('convChart').getContext('2d'), {
+    type:'line',
+    data:{labels, datasets:[
+      {label:'miss (m)', data, borderColor:'#3a5478', borderWidth:1.5,
+       pointBackgroundColor:colors, pointBorderColor:colors, pointRadius:5, tension:0.25, fill:false},
+      {label:'final CEP', data:labels.map(()=>cep), borderColor:'#36f08a',
+       borderDash:[5,4], borderWidth:1.2, pointRadius:0, fill:false}
+    ]},
+    options:{responsive:true, animation:false,
+      scales:{
+        y:{type:'logarithmic', title:{display:true,text:'miss distance (m, log)',color:'#6f8bb0'},
+           grid:{color:'#142036'}, ticks:{color:'#6f8bb0'}},
+        x:{title:{display:true,text:'round',color:'#6f8bb0'}, grid:{color:'#142036'}, ticks:{color:'#6f8bb0'}}
+      },
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{afterLabel:(ctx)=> ctx.datasetIndex===0 ? e.history[ctx.dataIndex].phase : ''}}}
+    }
+  });
+}
+
+/* ---- 4. Learned vs true ---- */
+function fillLearned(e){
+  const rows = [
+    ['Gun bias · downrange', e.gun_bias_est[0], e.gun_bias_true[0], 'm'],
+    ['Gun bias · cross',     e.gun_bias_est[1], e.gun_bias_true[1], 'm'],
+    ['Wind error · downrange',e.atmo_correction_est[0], e.wind_true[0], 'm/s'],
+    ['Wind error · cross',    e.atmo_correction_est[1], e.wind_true[1], 'm/s'],
+  ];
+  $('lvtBody').innerHTML = rows.map(([k,est,tru,u])=>{
+    const d = Math.abs(est-tru);
+    const tol = u==='m' ? 12 : 0.6;
+    const cls = d<=tol ? 'match' : '';
+    const dtxt = d<=tol ? `<span class="matchpill">±${d.toFixed(u==='m'?1:2)}</span>` : d.toFixed(u==='m'?1:2);
+    return `<tr><td>${k}</td><td class="est">${est.toFixed(u==='m'?1:2)} ${u}</td>`+
+           `<td class="true">${tru.toFixed(u==='m'?1:2)} ${u}</td><td class="${cls}">${dtxt}</td></tr>`;
+  }).join('');
+  $('shotsBody').innerHTML = e.history.map(h=>
+    `<tr><td>${h.round}</td><td style="text-align:left"><span class="tag ${h.phase}">${h.phase.slice(0,3)}</span></td>`+
+    `<td>${h.miss[0].toFixed(1)}</td><td>${h.miss[1].toFixed(1)}</td><td>${h.radial.toFixed(1)}</td></tr>`
+  ).join('');
+}
+
+$('runBtn').addEventListener('click', runEngagement);
+checkBackend().then(()=>{ if(location.search.includes('autorun')) runEngagement(); });
+</script>
+</body>
+</html>
