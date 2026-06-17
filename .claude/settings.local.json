@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tests/run_all_tests.py)",
+      "Bash(python tests/test_sbe_transfer.py)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(jobs)",
+      "Bash(python -m pytest tests/ -k \"n_avg is within\" -v)",
+      "Bash(echo \"PID_R2: $!\")",
+      "Bash(echo \"PID_R3: $!\")",
+      "Bash(echo \"PID_R4: $!\")"
+    ]
+  }
+}

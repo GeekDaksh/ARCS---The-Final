@@ -1,0 +1,1718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ARCS — Artillery Range Control System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* ═══ Root ═══════════════════════════════════════════════════════ */
+:root{
+  --bg:#030609;
+  --surface:rgba(5,14,32,0.97);
+  --border:rgba(0,225,255,0.09);
+  --accent:#00E1FF;
+  --fire:#FF6B1A;
+  --hit:#00FF94;
+  --miss:#FF2040;
+  --warn:#FFB300;
+  --text:#EEF2FF;
+  --muted:rgba(160,200,255,0.30);
+  --font:'Space Grotesk',system-ui,sans-serif;
+  --mono:'Space Mono','Courier New',monospace;
+  --r:12px;
+}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);}
+body{font-family:var(--font);color:var(--text);cursor:none;}
+canvas{display:block;position:fixed;inset:0;}
+
+/* ═══ Cursor ═════════════════════════════════════════════════════ */
+#cur{position:fixed;width:6px;height:6px;background:var(--accent);border-radius:50%;
+  pointer-events:none;z-index:9999;transform:translate(-50%,-50%);
+  box-shadow:0 0 10px var(--accent);transition:transform .1s;}
+#cur-ring{position:fixed;width:26px;height:26px;border:1px solid rgba(0,225,255,.55);
+  border-radius:50%;pointer-events:none;z-index:9998;transform:translate(-50%,-50%);
+  transition:width .2s,height .2s,border-color .2s;}
+body.placing  #cur{transform:translate(-50%,-50%) scale(.5);background:var(--fire);box-shadow:0 0 12px var(--fire);}
+body.placing  #cur-ring{width:16px;height:16px;border-color:rgba(255,107,26,.7);}
+body.inflight #cur-ring{width:20px;height:20px;border-color:rgba(255,32,64,.7);
+  animation:pulse .5s ease infinite;}
+
+/* ── Panel base ──────────────────────────────────────────────────── */
+.panel{
+  position:fixed;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--r);
+  backdrop-filter:blur(36px) saturate(180%);
+  box-shadow:0 16px 48px rgba(0,0,0,.88),0 0 0 1px rgba(0,225,255,.03) inset;
+  pointer-events:auto;
+  user-select:none;
+  cursor:grab;
+  transition:border-color .2s,box-shadow .2s;
+}
+.panel:hover{border-color:rgba(0,225,255,.20);}
+.panel.dragging{
+  cursor:grabbing;
+  box-shadow:0 28px 64px rgba(0,0,0,.95),0 0 0 1px rgba(0,225,255,.20) inset;
+  z-index:600;
+}
+.p-head{
+  display:flex;align-items:center;gap:6px;
+  padding:11px 14px 0;
+  font-family:var(--mono);
+  font-size:7.5px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--accent);font-weight:700;
+}
+.p-head::before{content:'';display:block;width:8px;height:1px;background:var(--accent);opacity:.5;flex-shrink:0;}
+.p-body{padding:8px 14px 12px;}
+.p-sep{height:1px;background:var(--border);margin:5px 14px;}
+
+/* Stat rows */
+.stat-row{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;}
+.stat-k{font-size:8px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);}
+.stat-v{font-family:var(--mono);font-size:13px;letter-spacing:-.02em;color:var(--text);}
+.stat-v.ac{color:var(--accent);}
+.stat-v.ht{color:var(--hit);}
+.stat-v.ms{color:var(--miss);}
+.stat-v.fr{color:var(--fire);}
+.stat-v.dm{color:rgba(160,200,255,.18);font-size:11px;}
+.stat-v.wn{color:var(--warn);}
+
+/* Correction bars */
+.corr-row{display:flex;align-items:center;gap:7px;padding:2.5px 0;}
+.corr-k{font-size:7.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);width:52px;flex-shrink:0;}
+.corr-bar{flex:1;position:relative;height:4px;background:rgba(255,255,255,.06);border-radius:2px;}
+.corr-fill{position:absolute;top:0;height:100%;border-radius:2px;min-width:2px;
+  transition:left .4s cubic-bezier(.4,0,.2,1),width .4s cubic-bezier(.4,0,.2,1);}
+.corr-val{font-family:var(--mono);font-size:10.5px;width:56px;text-align:right;flex-shrink:0;}
+.corr-val.fr{color:var(--fire);}
+.corr-val.dm{color:rgba(160,200,255,.18);font-size:10px;}
+
+/* Big miss number */
+.big-num{font-family:var(--mono);font-size:34px;font-weight:700;letter-spacing:-.04em;line-height:1;text-align:center;padding:8px 0 4px;}
+.big-num.ht{color:var(--hit);}
+.big-num.ms{color:var(--miss);}
+.big-num.fr{color:var(--fire);}
+
+/* Progress bar */
+.prog-wrap{padding:0 14px 8px;}
+.prog-bar{height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;}
+.prog-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .35s cubic-bezier(.4,0,.2,1);}
+
+/* Shot bars */
+.sb-row{display:flex;align-items:center;gap:5px;margin:2.5px 0;}
+.sb-n{font-family:var(--mono);font-size:7px;color:var(--muted);width:13px;text-align:right;flex-shrink:0;}
+.sb-track{flex:1;height:3px;background:rgba(255,255,255,.05);border-radius:2px;overflow:hidden;}
+.sb-fill{height:100%;border-radius:2px;transition:width .45s cubic-bezier(.4,0,.2,1);}
+.sb-miss{font-family:var(--mono);font-size:7.5px;color:var(--muted);width:33px;text-align:right;flex-shrink:0;}
+
+/* ── Status bar ──────────────────────────────────────────────────── */
+#status-bar{
+  position:fixed;top:0;left:0;right:0;height:44px;
+  display:flex;align-items:center;padding:0 16px;gap:10px;
+  background:rgba(3,6,9,0.94);
+  border-bottom:1px solid var(--border);
+  backdrop-filter:blur(24px);
+  z-index:200;pointer-events:auto;
+}
+#sb-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:700;
+  padding:5px 12px;border-radius:100px;border:1px solid;
+  transition:all .25s;white-space:nowrap;
+}
+#sb-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0;}
+#sb-badge-sub{font-size:8px;color:var(--muted);letter-spacing:.05em;margin-left:2px;display:none;}
+.b-idle   {color:rgba(160,200,255,.4);border-color:rgba(160,200,255,.12);background:rgba(160,200,255,.04);}
+.b-idle   #sb-dot{background:rgba(160,200,255,.4);}
+.b-target {color:var(--accent);border-color:rgba(0,225,255,.25);background:rgba(0,225,255,.08);}
+.b-target #sb-dot{background:var(--accent);animation:blink 1s infinite;}
+.b-aim    {color:var(--fire);border-color:rgba(255,107,26,.25);background:rgba(255,107,26,.08);}
+.b-aim    #sb-dot{background:var(--fire);animation:blink .7s infinite;}
+.b-fire   {color:var(--miss);border-color:rgba(255,32,64,.28);background:rgba(255,32,64,.06);}
+.b-fire   #sb-dot{background:var(--miss);animation:blink .3s infinite;}
+.b-hit    {color:var(--hit);border-color:rgba(0,255,148,.25);background:rgba(0,255,148,.06);}
+.b-hit    #sb-dot{background:var(--hit);}
+#sb-title{flex:1;text-align:center;font-family:var(--mono);font-size:10px;letter-spacing:.30em;text-transform:uppercase;color:rgba(0,225,255,.28);font-weight:700;}
+#sb-srv{font-family:var(--mono);font-size:7.5px;letter-spacing:.12em;padding:4px 12px;border-radius:100px;border:1px solid;pointer-events:none;opacity:0;transition:opacity .4s;white-space:nowrap;}
+#sb-srv.on {color:var(--hit); border-color:rgba(0,255,148,.3); background:rgba(0,255,148,.06);opacity:1;}
+#sb-srv.off{color:var(--miss);border-color:rgba(255,32,64,.3); background:rgba(255,32,64,.06);opacity:1;}
+
+/* ── Panel positions ─────────────────────────────────────────────── */
+#panel-sol{top:56px;right:16px;width:238px;}
+
+/* Left column — single positioned element; children stack via flex */
+#left-col{
+  position:fixed; top:108px; left:16px; width:212px;
+  display:flex; flex-direction:column; gap:8px;
+  pointer-events:none; z-index:50;
+  max-height:calc(100vh - 180px);
+}
+#grouping,#eng{
+  position:relative;      /* NOT fixed/absolute — flex controls layout */
+  width:100%;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r);
+  backdrop-filter:blur(36px) saturate(180%);
+  box-shadow:0 16px 48px rgba(0,0,0,.88),0 0 0 1px rgba(0,225,255,.03) inset;
+  pointer-events:auto; user-select:none; cursor:grab;
+  transition:border-color .2s,box-shadow .2s;
+}
+#grouping:hover,#eng:hover{border-color:rgba(0,225,255,.20);}
+#left-col.dragging #grouping,#left-col.dragging #eng,#left-col.dragging{cursor:grabbing;}
+#grouping{ flex:0 0 auto; }
+#eng{
+  flex:1 1 auto; min-height:0;
+  overflow-y:auto; overflow-x:hidden; scrollbar-width:none;
+}
+#eng::-webkit-scrollbar{display:none;}
+#gc{ display:block; width:160px; height:160px; margin:0 auto; border-radius:6px; position:relative; inset:auto; }
+#shot-bars{padding:2px 14px 10px;max-height:100px;overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:thin;scrollbar-color:rgba(0,225,255,.2) transparent;}
+#shot-bars::-webkit-scrollbar{width:3px;}
+#shot-bars::-webkit-scrollbar-thumb{background:rgba(0,225,255,.2);border-radius:2px;}
+
+/* ── Telemetry ───────────────────────────────────────────────────── */
+#tele{bottom:80px;right:20px;min-width:154px;opacity:0;pointer-events:none;transition:opacity .35s;}
+#tele.show{opacity:1;pointer-events:auto;}
+
+/* ── Apex label ──────────────────────────────────────────────────── */
+#apex{position:fixed;font-family:var(--mono);font-size:9px;color:var(--fire);
+  pointer-events:none;display:none;background:rgba(0,4,12,.8);
+  padding:3px 8px;border-radius:100px;
+  border:1px solid rgba(255,107,26,.25);transform:translate(-50%,-140%);white-space:nowrap;}
+
+/* ── Result overlay ──────────────────────────────────────────────── */
+#result{
+  position:fixed;bottom:80px;left:50%;
+  transform:translateX(-50%) translateY(16px);
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;padding:24px 32px;
+  backdrop-filter:blur(40px);
+  text-align:center;opacity:0;pointer-events:none;
+  transition:all .5s cubic-bezier(.16,1,.3,1);
+  min-width:300px;z-index:150;
+}
+#result.show{opacity:1;transform:translateX(-50%) translateY(0);}
+#res-label{font-family:var(--mono);font-size:8px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);margin-bottom:7px;}
+#res-imp{font-size:62px;font-weight:700;letter-spacing:-.05em;line-height:1;margin-bottom:18px;}
+.rg{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+.ri{text-align:center;}
+.ri-l{font-size:7.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
+.ri-v{font-family:var(--mono);font-size:19px;font-weight:700;}
+
+/* ── Control strip ───────────────────────────────────────────────── */
+#ctrl{
+  position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+  display:flex;gap:3px;align-items:center;
+  background:rgba(3,6,9,0.97);border:1px solid var(--border);
+  border-radius:100px;padding:5px 9px;
+  backdrop-filter:blur(28px);box-shadow:0 10px 40px rgba(0,0,0,.80);
+  z-index:100;pointer-events:auto;
+}
+.btn{
+  padding:6px 13px;font-family:var(--font);font-size:9px;letter-spacing:.07em;
+  text-transform:uppercase;font-weight:600;cursor:none;
+  border-radius:100px;border:1px solid transparent;
+  background:transparent;color:rgba(200,215,255,.38);
+  transition:all .16s;white-space:nowrap;
+}
+.btn:hover{color:rgba(200,215,255,.88);background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08);}
+.btn.on{color:var(--accent);border-color:rgba(0,225,255,.25);background:rgba(0,225,255,.08);}
+.btn-fire{background:var(--accent);border-color:var(--accent);color:#000;font-weight:700;}
+.btn-fire:hover:not(:disabled){background:#2de8ff;box-shadow:0 0 20px rgba(0,225,255,.4);}
+.btn-fire:disabled{opacity:.16;pointer-events:none;}
+.btn-ai-on {color:var(--hit); border-color:rgba(0,255,148,.25);background:rgba(0,255,148,.06);}
+.btn-ai-off{color:var(--miss);border-color:rgba(255,32,64,.25); background:rgba(255,32,64,.06);}
+.vsep{width:1px;height:17px;background:var(--border);margin:0 2px;}
+.spd-wrap{display:flex;align-items:center;gap:6px;padding:0 5px;}
+.spd-l{font-size:7.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);}
+#spd{-webkit-appearance:none;width:50px;height:2px;background:rgba(255,255,255,.12);border-radius:2px;cursor:none;}
+#spd::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--accent);cursor:none;box-shadow:0 0 6px var(--accent);}
+/* Environmental parameter sliders */
+.env-wrap{display:flex;align-items:center;gap:5px;padding:0 4px;}
+.env-l{font-size:7px;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,179,0,.55);white-space:nowrap;}
+.env-v{font-family:var(--mono);font-size:8px;color:var(--warn);min-width:28px;}
+input.env-sl{-webkit-appearance:none;appearance:none;width:44px;height:2px;border-radius:2px;cursor:pointer;background:rgba(255,179,0,.18);}
+input.env-sl::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;border-radius:50%;background:var(--warn);box-shadow:0 0 5px var(--warn);}
+input.env-sl::-moz-range-thumb{width:10px;height:10px;border-radius:50%;background:var(--warn);border:none;}
+
+/* ── Backend-offline banner ──────────────────────────────────────── */
+#backend-offline{
+  position:fixed; inset:0; z-index:2000;
+  background:rgba(2,6,14,.86); backdrop-filter:blur(8px);
+  display:flex; align-items:center; justify-content:center;
+}
+#backend-offline-inner{
+  text-align:center; padding:36px 44px;
+  background:rgba(10,16,30,.96); border:1px solid rgba(255,60,60,.4);
+  border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,.7);
+  max-width:420px;
+}
+.bo-title{ color:#ff4040; font-family:var(--mono,monospace); font-size:15px;
+  letter-spacing:.18em; margin-bottom:14px; font-weight:700; }
+.bo-msg{ color:var(--muted,#9fb4cc); font-size:13px; line-height:1.6; margin-bottom:22px; }
+.bo-btn{ background:rgba(0,210,255,.12); border:1px solid rgba(0,210,255,.5);
+  color:#00d2ff; padding:10px 22px; border-radius:100px; cursor:pointer;
+  font-size:12px; letter-spacing:.1em; text-transform:uppercase; }
+.bo-btn:hover{ background:rgba(0,210,255,.22); }
+
+/* ── Utility colours ─────────────────────────────────────────────── */
+.ht{color:var(--hit);}
+.ms{color:var(--miss);}
+.fr{color:var(--fire);}
+.dm{color:rgba(160,200,255,.18);}
+
+/* ═══ Animations ══════════════════════════════════════════════════ */
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.15}}
+@keyframes pulse{0%,100%{opacity:.6}50%{opacity:1}}
+
+/* ═══ Phase overlay ══════════════════════════════════════════════ */
+#phase-ov{position:fixed;bottom:82px;left:50%;transform:translateX(-50%) translateY(10px);
+  text-align:center;pointer-events:none;opacity:0;transition:all .45s cubic-bezier(.16,1,.3,1);}
+#phase-ov.show{opacity:1;transform:translateX(-50%) translateY(0);}
+#phase-lbl{font-family:var(--mono);font-size:8px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:4px;}
+#phase-msg{font-size:20px;font-weight:700;letter-spacing:-.04em;}
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div id="cur"></div>
+<div id="cur-ring"></div>
+<div id="apex"></div>
+
+<!-- Status bar -->
+<div id="status-bar">
+  <div id="sb-badge" class="b-idle">
+    <span id="sb-dot"></span><span id="sb-text">READY</span>
+  </div>
+  <span id="sb-badge-sub"></span>
+  <div id="sb-title">ARCS</div>
+  <div id="sb-srv"></div>
+  <button class="btn" id="btn-cam" onclick="cycleCam()">Orbit</button>
+  <div class="spd-wrap">
+    <span class="spd-l">Spd</span>
+    <input type="range" id="spd" min=".3" max="3" step=".1" value="1">
+  </div>
+</div>
+
+<!-- Phase flash overlay -->
+<div id="phase-ov"><div id="phase-lbl"></div><div id="phase-msg"></div></div>
+
+<!-- Panel: Fire Solution -->
+<div id="panel-sol" class="panel">
+  <div class="p-head">Target</div>
+  <div class="p-body">
+    <div class="stat-row"><span class="stat-k">Range</span>   <span class="stat-v ac" id="h-range">—</span></div>
+    <div class="stat-row"><span class="stat-k">Bearing</span> <span class="stat-v"    id="h-bearing">—</span></div>
+    <div class="stat-row"><span class="stat-k">Height Δ</span><span class="stat-v"    id="h-height">—</span></div>
+  </div>
+  <div class="p-sep"></div>
+  <div class="p-head">Fire Solution</div>
+  <div class="p-body">
+    <div class="stat-row"><span class="stat-k">Elevation</span><span class="stat-v" id="h-elev">—</span></div>
+    <div class="stat-row"><span class="stat-k">Azimuth</span>  <span class="stat-v" id="h-azim">—</span></div>
+    <div class="stat-row"><span class="stat-k">Muzzle V</span> <span class="stat-v" id="h-v0">—</span></div>
+    <div class="stat-row"><span class="stat-k">T.O.F.</span>   <span class="stat-v" id="h-tof">—</span></div>
+    <div class="stat-row"><span class="stat-k">Max Alt</span>  <span class="stat-v" id="h-alt">—</span></div>
+  </div>
+  <div class="p-sep"></div>
+  <div class="p-head">FCS Correction</div>
+  <div class="p-body">
+    <div class="corr-row">
+      <span class="corr-k">Δ QE</span>
+      <div class="corr-bar"><div class="corr-fill" id="cf-dp"></div></div>
+      <span class="corr-val fr" id="h-dp">—</span>
+    </div>
+    <div class="corr-row">
+      <span class="corr-k">Δ Deflection</span>
+      <div class="corr-bar"><div class="corr-fill" id="cf-db"></div></div>
+      <span class="corr-val fr" id="h-db">—</span>
+    </div>
+    <div class="corr-row">
+      <span class="corr-k">Δ Muz V</span>
+      <div class="corr-bar"><div class="corr-fill" id="cf-dv"></div></div>
+      <span class="corr-val fr" id="h-dv">—</span>
+    </div>
+    <div class="stat-row" style="margin-top:4px"><span class="stat-k">FC Table</span><span class="stat-v dm" id="h-src">—</span></div>
+    <div class="stat-row" style="margin-top:2px"><span class="stat-k" style="color:var(--warn)">Env Δ MV</span><span class="stat-v" id="h-envdv" style="color:var(--warn)">—</span></div>
+  </div>
+</div>
+
+<!-- Left column: Beaten Zone above Fire Mission, stacked as one draggable unit -->
+<div id="left-col">
+
+  <!-- Beaten Zone (was #panel-map) -->
+  <div id="grouping">
+    <div class="p-head">Beaten Zone</div>
+    <div style="padding:8px 14px 0">
+      <canvas id="gc" width="182" height="182"></canvas>
+    </div>
+    <div class="p-body" style="display:flex;justify-content:space-between;padding-top:9px;">
+      <div style="text-align:center;flex:1">
+        <div style="font-size:7px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:3px">Uncorrected</div>
+        <div class="stat-v ms" id="g-base" style="display:block">—</div>
+      </div>
+      <div style="text-align:center;flex:1">
+        <div style="font-size:7px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:3px">FCS CEP</div>
+        <div class="stat-v ht" id="g-ai" style="display:block">—</div>
+      </div>
+      <div style="text-align:center;flex:1">
+        <div style="font-size:7px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:3px">Correction</div>
+        <div class="stat-v" id="g-imp" style="display:block">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fire Mission (was #panel-eng) -->
+  <div id="eng">
+    <div class="p-head">Fire Mission</div>
+    <div class="p-body">
+      <div class="stat-row"><span class="stat-k">Round</span><span class="stat-v" id="ep-shot">—</span></div>
+      <div class="stat-row"><span class="stat-k">Phase</span><span class="stat-v dm" id="ep-phase">—</span></div>
+      <div class="big-num ms" id="ep-miss">—</div>
+      <div class="stat-row"><span class="stat-k">Best MPI</span><span class="stat-v ht" id="ep-best">—</span></div>
+    </div>
+    <div class="p-sep"></div>
+    <div class="p-body" style="padding-top:6px;padding-bottom:4px">
+      <div class="stat-row"><span class="stat-k">Δ QE</span>         <span class="stat-v fr" id="ep-dp">—</span></div>
+      <div class="stat-row"><span class="stat-k">Δ Muzzle V</span>  <span class="stat-v fr" id="ep-dv">—</span></div>
+      <div class="stat-row"><span class="stat-k">MPI Trend</span><span class="stat-v" id="ep-trend">—</span></div>
+      <div class="stat-row"><span class="stat-k">Trend Dir</span><span class="stat-v" id="ep-trend-dir">—</span></div>
+      <div class="stat-row"><span class="stat-k">Min Dispersion</span><span class="stat-v dm" id="ep-floor">—</span></div>
+    </div>
+    <div class="p-sep"></div>
+    <div class="prog-wrap">
+      <div class="prog-bar"><div class="prog-fill" id="prog-fill" style="width:0%"></div></div>
+    </div>
+    <div id="shot-bars"></div>
+  </div>
+
+</div>
+
+<!-- Telemetry (in-flight) -->
+<div id="tele" class="panel">
+  <div class="p-body" style="padding-top:12px">
+    <div class="stat-row"><span class="stat-k">T.O.F.</span>  <span class="stat-v fr" id="tele-tof">—</span></div>
+    <div class="stat-row"><span class="stat-k">Elapsed</span> <span class="stat-v fr" id="tele-ela">—</span></div>
+    <div class="stat-row"><span class="stat-k">Altitude</span><span class="stat-v fr" id="tele-alt">—</span></div>
+    <div class="stat-row"><span class="stat-k">Velocity</span><span class="stat-v fr" id="tele-vel">—</span></div>
+  </div>
+</div>
+
+<!-- Result overlay -->
+<div id="result">
+  <div id="res-label">Mission Result</div>
+  <div id="res-imp">—</div>
+  <div class="rg">
+    <div class="ri"><div class="ri-l">Uncorrected MPI</div><div class="ri-v ms" id="res-base">—</div></div>
+    <div class="ri"><div class="ri-l">FCS Corrected</div><div class="ri-v"     id="res-ai">—</div></div>
+  </div>
+</div>
+
+<!-- Backend-offline blocking banner -->
+<div id="backend-offline" style="display:none;">
+  <div id="backend-offline-inner">
+    <div class="bo-title">&#9888; BACKEND OFFLINE</div>
+    <div class="bo-msg">Fire control backend unreachable. Cannot compute fire solution.<br>
+      Start the ARCS server, then press Retry.</div>
+    <button class="bo-btn" onclick="retryBackend()">Retry Connection</button>
+  </div>
+</div>
+
+<!-- Control strip -->
+<div id="ctrl">
+  <button class="btn" id="btn-rand"  onclick="randomTarget()">⊕ Random</button>
+  <button class="btn" id="btn-place" onclick="togglePlace()">✥ Place</button>
+  <div class="vsep"></div>
+  <button class="btn btn-fire" id="btn-fire" onclick="fireShot()" disabled>▶ Fire Round</button>
+  <button class="btn" id="btn-auto"  onclick="toggleAuto()" disabled style="color:var(--fire);border-color:rgba(255,107,26,.25)">⟳ Auto Fire</button>
+  <button class="btn" onclick="doReset()">↺ New Mission</button>
+  <div class="vsep"></div>
+  <button class="btn btn-ai-on" id="btn-ai" onclick="toggleAI()">FCS On</button>
+  <div class="vsep"></div>
+  <div class="env-wrap">
+    <span class="env-l">CLASS</span>
+    <select id="cls-sel" onchange="selectedWeaponClass=this.value"
+            style="background:rgba(0,0,0,.45);color:var(--txt);border:1px solid rgba(255,255,255,.18);border-radius:4px;padding:1px 5px;font-size:11px;font-family:inherit">
+      <option value="PRECISION">PREC DF</option>
+      <option value="ARTILLERY">ARTILLERY</option>
+    </select>
+  </div>
+  <div class="vsep"></div>
+  <div class="env-wrap">
+    <span class="env-l">Prop°C</span>
+    <input class="env-sl" type="range" id="env-temp" min="-30" max="50" step="1" value="15"
+           oninput="propellantTemp=+this.value;document.getElementById('env-temp-v').textContent=(propellantTemp>15?'+':'')+propellantTemp+'°'">
+    <span class="env-v" id="env-temp-v">+0°</span>
+  </div>
+  <div class="env-wrap">
+    <span class="env-l">Wear</span>
+    <input class="env-sl" type="range" id="env-wear" min="0" max="5000" step="100" value="0"
+           oninput="barrelWearRounds=+this.value;document.getElementById('env-wear-v').textContent=barrelWearRounds">
+    <span class="env-v" id="env-wear-v">0</span>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+'use strict';
+
+// ═══ Custom cursor ════════════════════════════════════════════════
+const curEl = document.getElementById('cur');
+const curRing = document.getElementById('cur-ring');
+let mx = 0, my = 0, rx = 0, ry = 0;
+document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
+(function animCur() {
+  rx += (mx - rx) * 0.24; ry += (my - ry) * 0.24;
+  curEl.style.left   = mx + 'px'; curEl.style.top   = my + 'px';
+  curRing.style.left = rx + 'px'; curRing.style.top = ry + 'px';
+  requestAnimationFrame(animCur);
+})();
+
+// ═══ Constants ════════════════════════════════════════════════════
+const G = 9.81, V0 = 100.0;
+// ── Artillery FCS Noise Model ─────────────────────────────────────────
+// Models a direct-fire artillery system (40mm autocannon / light gun)
+// with an automated Fire Control System sensor suite.
+//
+// sv = 2.0 m/s  Round-to-round muzzle velocity dispersion.
+//   Per US Patent 9,600,900: 40mm AGL exhibits 5 m/s at 1σ.
+//   2.0 m/s = direct-fire system with FCS muzzle velocity sensing.
+//   FM 6-40: "Round-to-round corrections for dispersion cannot be made."
+//   This is the irreducible per-round variation. Only the SYSTEMATIC
+//   component (barrel misalignment, MV drift) is correctable by the FCS.
+//
+// sp = 0.10°  FCS laying error — elevation axis.
+//   Equivalent to 1.75 mils. Appropriate for an automated FCS with
+//   IMU feedback and digital gun laying.
+//
+// sy = 0.10°  FCS laying error — azimuth/deflection axis.
+//   Same sensor suite as elevation.
+//
+// Expected CEP at 300m range: ≈4–5m (noise floor, irreducible).
+// Expected systematic bias at 300m: 8–15m (correctable by FCS).
+// Round 1→2 improvement: dramatic (systematic bias removed).
+// Round 2+ variation: ≈4–5m (noise floor only, FCS fully converged).
+const NOISE = { sp: 0.10, sy: 0.10, sv: 1.5 }; // legacy — kept so no call site breaks
+
+const WEAPON_CLASSES = {
+  PRECISION: { label:'PRECISION DF', sp:0.03, sy:0.03, sv:0.25 },
+  ARTILLERY: { label:'ARTILLERY',    sp:0.10, sy:0.10, sv:1.50 },
+};
+
+// Engagement protocol
+const BASELINE_SHOTS = 1;   // Registration round (1 round, uncorrected)
+const BO_SHOTS       = 7;   // Adjustment rounds (7 rounds, FCS learning)
+const VERIFY_SHOTS   = 2;   // Fire for effect (2 rounds, locked solution)
+const TOTAL_SHOTS    = BASELINE_SHOTS + BO_SHOTS + VERIFY_SHOTS; // = 10
+
+// Gaussian noise (Box–Muller)
+const randn = () => {
+  let u=0,v=0;
+  while(!u) u=Math.random(); while(!v) v=Math.random();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+};
+
+// ═══ State ════════════════════════════════════════════════════════
+let state = 'idle', aiOn = true, placing = false, camMode = 0;
+let solData = null, target = null, sol = null;
+let trajBias = [], trajCorr = [];
+let lnBias = null, lnCorr = null, impactMarkers = [];
+let animId = null, aimTimer = null, animStart = null, projIdx = 0;
+let camTheta = 215, camPhi = 28, camDist = 220;
+const camTgt = new THREE.Vector3(40, 0, 80);
+const spd = () => +document.getElementById('spd').value;
+
+// Engagement state
+let shotHistory = [], correction = {dp:0,db:0,dv:0};
+let bestMiss = Infinity, bestCorr = {dp:0,db:0,dv:0};
+let autoFiring = false, autoTimer = null;
+let engEnvDv0 = 0; // env v0 offset frozen at engagement start (measured, not learned)
+let selectedWeaponClass = 'PRECISION';              // chosen in control strip; takes effect next mission
+let engNoise = {...WEAPON_CLASSES.PRECISION};       // noise profile frozen at engagement start
+let lockedCorrection = null;                        // MPI-group locked solution, set just before FFE
+
+// Environmental parameters (Gap 3)
+let propellantTemp = 15;  // °C, nominal = 15°C
+let barrelWearRounds = 0; // round count, nominal = 0
+
+/** Additional v0 bias from environmental conditions.
+ *  Propellant temp:  0.35 m/s per °C from 15°C nominal (IRL: ~0.3–0.4 m/s/°C for direct fire)
+ *  Barrel wear:      0.5 m/s per 100 rounds degradation
+ */
+function envV0Bias() {
+  const tempDelta = (propellantTemp - 15) * 0.35;
+  const wearDelta = -(barrelWearRounds / 100) * 0.5;
+  return tempDelta + wearDelta;
+}
+const impactDots3D = [];
+
+// ═══ Renderer ═════════════════════════════════════════════════════
+const cnv = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas: cnv, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setClearColor(0x000507);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000507, 0.0016);
+const cam = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.5, 3000);
+
+// ═══ Lights ═══════════════════════════════════════════════════════
+scene.add(new THREE.AmbientLight(0x304860, 4.5));
+const sun = new THREE.DirectionalLight(0xd0e0ff, 2.8);
+sun.position.set(80, 200, -150); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+['left','right','top','bottom'].forEach(k =>
+  sun.shadow.camera[k] = (k === 'left' || k === 'bottom') ? -400 : 400);
+sun.shadow.camera.far = 700;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0x204070, 0x060c14, 2.5));
+const rim = new THREE.DirectionalLight(0x2060d0, 1.8);
+rim.position.set(-80, 60, 80); scene.add(rim);
+
+// ═══ Stars ════════════════════════════════════════════════════════
+const starV = [];
+for(let i = 0; i < 4000; i++)
+  starV.push((Math.random()-.5)*3000, 100+Math.random()*900, (Math.random()-.5)*3000);
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starV, 3));
+scene.add(new THREE.Points(starGeo,
+  new THREE.PointsMaterial({ color: 0x3355aa, size: 0.75, sizeAttenuation: true,
+    transparent: true, opacity: 0.65 })));
+
+// Moon
+const moonMesh = new THREE.Mesh(new THREE.SphereGeometry(18, 16, 12),
+  new THREE.MeshBasicMaterial({ color: 0x8899bb }));
+moonMesh.position.set(-600, 440, -400); scene.add(moonMesh);
+const moonLight = new THREE.PointLight(0x4060a0, 0.35, 1600);
+moonLight.position.copy(moonMesh.position); scene.add(moonLight);
+
+// ═══ Ground & grid ════════════════════════════════════════════════
+const gnd = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600),
+  new THREE.MeshLambertMaterial({ color: 0x050c10 }));
+gnd.rotation.x = -Math.PI / 2; gnd.receiveShadow = true; gnd.name = 'ground';
+scene.add(gnd);
+const grid1 = new THREE.GridHelper(1600, 160, 0x001e28, 0x000e14);
+grid1.position.y = 0.02; scene.add(grid1);
+const grid2 = new THREE.GridHelper(1600, 32, 0x002438, 0x001020);
+grid2.position.y = 0.03; scene.add(grid2);
+
+// Range rings (100 – 500 m)
+[100, 200, 300, 400, 500].forEach(r => {
+  const pts = [];
+  for(let a = 0; a <= Math.PI * 2.01; a += 0.03)
+    pts.push(new THREE.Vector3(Math.sin(a)*r, 0.05, Math.cos(a)*r));
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({
+      color: r % 200 === 0 ? 0x001e38 : 0x000f1c,
+      transparent: true, opacity: 0.9 })
+  ));
+});
+
+// Distant hills (NOTE: only regular minus signs here)
+function addHills(zPos, color) {
+  const geo = new THREE.PlaneGeometry(2800, 600, 70, 12);
+  const v = geo.attributes.position.array;
+  for(let i = 0; i < v.length; i += 3)
+    v[i+1] = Math.sin(v[i]*.007 + v[i+2]*.005)*20
+            + Math.cos(v[i]*.013)*14
+            + Math.sin(v[i+2]*.009)*10 + 32;
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
+  m.rotation.x = -Math.PI / 2; m.position.set(0, 0, zPos); scene.add(m);
+}
+addHills(-750,  0x06100a);
+addHills(-1300, 0x030808);
+
+// ═══ Tank ═════════════════════════════════════════════════════════
+const tankG = new THREE.Group(); scene.add(tankG);
+const mH = new THREE.MeshPhongMaterial({ color: 0x2d4055, specular: 0x304860, shininess: 18 });
+const mT = new THREE.MeshPhongMaterial({ color: 0x1a2535, shininess: 6 });
+const mU = new THREE.MeshPhongMaterial({ color: 0x32485e, specular: 0x3a5070, shininess: 24 });
+const mB = new THREE.MeshPhongMaterial({ color: 0x303038, specular: 0x484850, shininess: 40 });
+const mD = new THREE.MeshPhongMaterial({ color: 0x1c2430, shininess: 4 });
+
+function box(w,h,d,mat,px,py,pz,rx){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+  m.position.set(px,py,pz); if(rx) m.rotation.x=rx; m.castShadow=true; tankG.add(m); return m;
+}
+box(6.4,2.8,14.8,mH,  0,1.9, 0);        // hull
+box(6.4,2.4, 4,  mH,  0,2.7, 7.4, .36); // glacis
+box(6.4,2.2, 2,  mH,  0,2.0,-7.6,-.14); // rear
+
+// Tracks
+[-1,1].forEach(s => {
+  const tr=new THREE.Mesh(new THREE.BoxGeometry(2.4,2.8,16.5),mT);
+  tr.position.set(s*4.4,1.8,0); tr.castShadow=true; tankG.add(tr);
+  for(let i=-6;i<=6;i+=1.5){
+    const w=new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.1,2.2,10),mT);
+    w.rotation.z=Math.PI/2; w.position.set(s*4.6,.9,i); tankG.add(w);
+  }
+  const f=new THREE.Mesh(new THREE.BoxGeometry(.4,1.4,15.5),mD);
+  f.position.set(s*3.7,1.9,0); tankG.add(f);
+});
+
+// Turret pivot
+const turrP = new THREE.Group(); turrP.position.set(0,3.7,1.2); tankG.add(turrP);
+const turrBody=new THREE.Mesh(new THREE.CylinderGeometry(3,3.4,2.2,14),mU);
+turrBody.castShadow=true; turrP.add(turrBody);
+const turrTop=new THREE.Mesh(new THREE.CylinderGeometry(2.6,3,.8,14),mD);
+turrTop.position.y=1.5; turrP.add(turrTop);
+const cupola=new THREE.Mesh(new THREE.CylinderGeometry(.65,.75,1,10),mD);
+cupola.position.set(-.8,2.2,.4); turrP.add(cupola);
+const bustle=new THREE.Mesh(new THREE.BoxGeometry(4.5,1.3,3),mD);
+bustle.position.set(0,.5,-2.4); turrP.add(bustle);
+// Smoke launchers
+[-1,1].forEach(s=>[0,1,2].forEach(i=>{
+  const sl=new THREE.Mesh(new THREE.CylinderGeometry(.16,.16,1.6,6),mD);
+  sl.rotation.x=.55; sl.position.set(s*2.6+i*.22*s,.4,1.8+i*.08); turrP.add(sl);
+}));
+
+// Barrel pivot
+const barrP = new THREE.Group(); barrP.position.set(0,.7,0); turrP.add(barrP);
+const barrMesh=new THREE.Mesh(new THREE.CylinderGeometry(.20,.26,14,8),mB);
+barrMesh.rotation.x=Math.PI/2; barrMesh.position.z=7; barrMesh.castShadow=true; barrP.add(barrMesh);
+const mantlet=new THREE.Mesh(new THREE.CylinderGeometry(.4,.4,1.8,8),mB);
+mantlet.rotation.x=Math.PI/2; mantlet.position.z=5; barrP.add(mantlet);
+const muzzBrake=new THREE.Mesh(new THREE.BoxGeometry(.82,.66,1.8),mB);
+muzzBrake.position.z=14.2; barrP.add(muzzBrake);
+const muzzFlash=new THREE.PointLight(0xff8800,0,100);
+muzzFlash.position.z=14; barrP.add(muzzFlash);
+
+// ═══ Target ═══════════════════════════════════════════════════════
+const tgtG = new THREE.Group(); scene.add(tgtG); tgtG.visible=false;
+[[9,.18,0xffffff,.04],[7,.18,0xffffff,.07],[5,.20,0x00d2ff,.15],
+ [3,.22,0x00d2ff,.32],[1.4,.26,0x00e5ff,.7]].forEach(([r,t,c,ei])=>{
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(r,t,8,64),
+    new THREE.MeshPhongMaterial({color:c,emissive:c,emissiveIntensity:ei}));
+  ring.rotation.x=Math.PI/2; ring.position.y=.12; tgtG.add(ring);
+});
+const tgtPost=new THREE.Mesh(new THREE.CylinderGeometry(.15,.15,3,8),
+  new THREE.MeshPhongMaterial({color:0x00d2ff,emissive:0x00d2ff,emissiveIntensity:.7}));
+tgtPost.position.y=1.5; tgtG.add(tgtPost);
+const tgtLight=new THREE.PointLight(0x00d2ff,2.5,40);
+tgtLight.position.y=5; tgtG.add(tgtLight);
+
+// Ghost ring for placement
+const ghostRing=new THREE.Mesh(new THREE.RingGeometry(6,9,40),
+  new THREE.MeshBasicMaterial({color:0x00d2ff,transparent:true,opacity:.35,side:THREE.DoubleSide}));
+ghostRing.rotation.x=-Math.PI/2; ghostRing.position.y=.1; ghostRing.visible=false; scene.add(ghostRing);
+
+// ═══ Projectile ═══════════════════════════════════════════════════
+const projMesh=new THREE.Mesh(new THREE.SphereGeometry(.55,12,12),
+  new THREE.MeshPhongMaterial({color:0xff6020,emissive:0xff4000,emissiveIntensity:1.6}));
+projMesh.visible=false; scene.add(projMesh);
+const projLight=new THREE.PointLight(0xff6020,5.5,65); projMesh.add(projLight);
+
+// Impact ring
+const impRing=new THREE.Mesh(new THREE.RingGeometry(.2,.8,28),
+  new THREE.MeshBasicMaterial({side:THREE.DoubleSide,transparent:true,opacity:1}));
+impRing.rotation.x=-Math.PI/2; impRing.position.y=.15; impRing.visible=false; scene.add(impRing);
+
+// ═══ Raycaster ════════════════════════════════════════════════════
+const raycaster=new THREE.Raycaster(), mouseVec=new THREE.Vector2();
+
+// ═══ Physics helpers ══════════════════════════════════════════════
+function makeTraj(pitchRad, bearingRad, v0, steps=200) {
+  const vy=v0*Math.sin(pitchRad), vHz=v0*Math.cos(pitchRad);
+  const vx=vHz*Math.sin(bearingRad), vz=vHz*Math.cos(bearingRad);
+  const tMax=vy>0 ? (2*vy/G)*1.4 : 0.5;
+  const dt=tMax/steps, pts=[];
+  for(let i=0;i<=steps;i++){
+    const t=i*dt, y=vy*t-.5*G*t*t;
+    if(y<-2&&i>8) break;
+    pts.push(new THREE.Vector3(vx*t, Math.max(.08,y), vz*t));
+  }
+  return pts;
+}
+
+function impactPoint(pitchRad, bearingRad, v0, ty) {
+  const vy=v0*Math.sin(pitchRad), vHz=v0*Math.cos(pitchRad);
+  const vx=vHz*Math.sin(bearingRad), vz=vHz*Math.cos(bearingRad);
+  const disc=vy*vy-2*G*ty; if(disc<0) return null;
+  const tof=(vy+Math.sqrt(disc))/G;
+  return new THREE.Vector3(vx*tof, ty, vz*tof);
+}
+
+function missDist(a,b){ return Math.hypot(a.x-b.x, a.z-b.z); }
+
+function applyBias(pD, bD, v0) {
+  if(!solData) return {pitch:pD, bearing:bD, v0:v0};
+  return { pitch:pD+solData.bias.pitch, bearing:bD+solData.bias.yaw, v0:v0+solData.bias.v0+engEnvDv0 };
+}
+
+function getPINN() {
+  if(!solData||!solData.pinn) return {dp:0,db:0,dv:0};
+  return {dp:solData.pinn.delta_pitch, db:solData.pinn.delta_yaw, dv:solData.pinn.delta_v0};
+}
+
+// ── Per-shot simulation: fires once with given correction + bias + noise ──
+function fireSingleShot(corrDP, corrDB, corrDV) {
+  if(!sol||!target||!solData) return null;
+  const corrPitch   = sol.pD + corrDP;
+  const corrBearing = sol.bD + corrDB;
+  const corrV0      = V0    + corrDV;
+  // Apply real robot bias from server (or local fallback)
+  const b = applyBias(corrPitch, corrBearing, corrV0);
+  // Add stochastic noise (irreducible)
+  const pR = (b.pitch   + randn()*engNoise.sp) * Math.PI/180;
+  const bR = (b.bearing + randn()*engNoise.sy) * Math.PI/180;
+  const fv  = b.v0      + randn()*engNoise.sv;
+  // Forward simulate to target height
+  const vy = fv*Math.sin(pR), vHz = fv*Math.cos(pR);
+  const vx = vHz*Math.sin(bR), vz = vHz*Math.cos(bR);
+  const disc = vy*vy - 2*G*target.y; if(disc < 0) return null;
+  const tof = (vy+Math.sqrt(disc))/G;
+  const ix = vx*tof, iz = vz*tof;
+  return { x:ix, y:target.y, z:iz, errX:ix-target.x, errZ:iz-target.z,
+           miss:Math.hypot(ix-target.x, iz-target.z) };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// FORGETTING RLS ESTIMATOR  (Iterative Learning Control — Bristow et al. 2006)
+// ══════════════════════════════════════════════════════════════════════════
+// State: [optimal_db_deg, optimal_dv] — corrections that minimise miss.
+//
+// BEARING ROTATION: errRange = cos(b)·errZ + sin(b)·errX  → drives Δv0
+//                   errLat   = −sin(b)·errZ + cos(b)·errX → drives Δbearing
+//
+// Forgetting factor λ < 1 divides covariance each step, preventing collapse
+// and enabling adaptation to drift. p_db/p_dv set initial gain magnitude.
+// ══════════════════════════════════════════════════════════════════════════
+
+class ForgettingRLS {
+  constructor(init_db=0, init_dv=0, lambda=0.93, p_db=16.0, p_dv=25.0) {
+    this.db   = init_db;
+    this.dv   = init_dv;
+    this.lam  = lambda;
+    this.P_db = p_db;
+    this.P_dv = p_dv;
+    this.n    = 0;
+  }
+  update(corr_db, corr_dv, errLat, errRange, range, tofCos) {
+    // ── noise variances ────────────────────────────────────────────
+    const H_db  = range * Math.PI/180;
+    const R_lat = (0.36 * H_db)**2;
+    const H_dv  = tofCos;
+    const R_rng = (1.5*tofCos)**2 + (0.3*H_db)**2;
+    // ── observations ──────────────────────────────────────────────
+    let y_db = errLat;
+    let y_dv = errRange;
+    // Outlier rejection: cap observation to 3 sigma of measurement noise.
+    // A single round cannot change the FCS solution by more than 3x the
+    // expected noise. This prevents one bad round from corrupting the solution.
+    const MAX_INNOVATION_DV = 3 * Math.sqrt(R_rng);   // 3 * 1.5 = 4.5 m/s
+    const MAX_INNOVATION_DB = 3 * Math.sqrt(R_lat);   // 3 * 0.6 = 1.8 deg
+    y_dv = this.dv + Math.max(-MAX_INNOVATION_DV, Math.min(MAX_INNOVATION_DV, y_dv - this.dv));
+    y_db = this.db + Math.max(-MAX_INNOVATION_DB, Math.min(MAX_INNOVATION_DB, y_db - this.db));
+    // ── lateral / bearing axis ──────────────────────────────────────
+    const inDB  = y_db - H_db*(corr_db - this.db);
+    const S_db  = H_db*H_db*this.P_db + R_lat;
+    const K_db  = this.P_db*H_db/Math.max(S_db,1e-9);
+    this.db    -= K_db*inDB;
+    this.P_db   = (1-K_db*H_db)*this.P_db / this.lam;
+    // ── range / v0 axis ────────────────────────────────────────────
+    const inDV  = y_dv - H_dv*(corr_dv - this.dv);
+    const S_dv  = H_dv*H_dv*this.P_dv + R_rng;
+    const K_dv  = this.P_dv*H_dv/Math.max(S_dv,1e-9);
+    this.dv    -= K_dv*inDV;
+    this.P_dv   = (1-K_dv*H_dv)*this.P_dv / this.lam;
+    this.n++;
+    return this.get();
+  }
+  get() { return {dp:0, db:Math.max(-8,Math.min(8,this.db)), dv:Math.max(-22,Math.min(22,this.dv))}; }
+}
+
+let shotKF = new ForgettingRLS();
+
+// Rotate Three.js world-frame errors (X=lateral, Z=forward) into barrel frame
+function rotateErrors(errX, errZ) {
+  if(!sol) return {errRange:errZ, errLat:errX};
+  const cosB=Math.cos(sol.bR), sinB=Math.sin(sol.bR);
+  return { errRange: cosB*errZ + sinB*errX, errLat: -sinB*errZ + cosB*errX };
+}
+
+function analyticalPreCorr() {
+  if(!solData) return {dp:0, db:0, dv:0};
+  // Artillery FCS Registration Correction.
+  // Computed from server-side sensor measurements (bias_model.py):
+  //   bias.pitch = barrel elevation misalignment + gravity sag
+  //   bias.yaw   = bore axis azimuth offset (gun cant, boresight error)
+  //   bias.v0    = muzzle velocity deviation from nominal
+  //
+  // 91%/88%/87% efficiency: FCS applies first correction conservatively
+  // to avoid overshoot. Residual corrected in subsequent adjustment rounds.
+  // Matches FM 6-40 adjustment procedure: bracket → halve → correct.
+  //
+  // DO NOT use solData.pinn values here. The PINN was trained on
+  // contaminated engagement data and overcorrects the muzzle velocity bias.
+  //
+  // Two-component dv correction:
+  //   Barrel bias (bias.v0): estimated, applied at 91% — residual learned by ForgettingRLS.
+  //   Env offset (engEnvDv0): measured (thermometer + round counter), applied at 100%.
+  //   The env component is feed-forward: it is known before round 1, so the FCS need
+  //   not spend adjustment rounds discovering what the thermometer already knows.
+  return {
+    dp: -solData.bias.pitch * 0.88,
+    db: -solData.bias.yaw   * 0.87,
+    dv: -solData.bias.v0    * 0.91 + (-engEnvDv0),
+  };
+}
+
+// ── Choose correction for shot N ──────────────────────────────────
+// AI ON:  PINN prior initialises the KF — only the small residual (~10%) needs
+// to be learned. Bearing rotation ensures corrections point in the correct
+// physical direction even at large bearing angles.
+// AI OFF: KF starts at (0,0). Shots 2-4 are random exploration (n_init phase).
+//         KF then converges ~3 shots later than AI ON.
+function correctionForShot(n) {
+  if(n < BASELINE_SHOTS) return {dp:0, db:0, dv:0};
+  if(n >= BASELINE_SHOTS + BO_SHOTS) return lockedCorrection || shotKF.get();
+
+  if(aiOn) {
+    const boShotIdx = n - BASELINE_SHOTS;
+    if(boShotIdx === 0) {
+      // First BO shot: analyticalPreCorr initialises the KF prior so subsequent
+      // shots only need to learn the small residual (~10% of total bias).
+      // The KF then refines from this informed starting point.
+      const pre = analyticalPreCorr();
+      // Tight prior: trust PINN to within 0.5 m/s for v0 and 0.3° for bearing.
+      // P_dv=0.75 gives K_initial=0.25 instead of 0.917 — prevents oscillation.
+      // ILC monotonic convergence requires K < 0.5 (Bristow et al., IEEE 2006).
+      shotKF = new ForgettingRLS(pre.db, pre.dv, 0.90, 0.09, 0.75);
+      return pre;
+    }
+    // KF has converged: return its current estimate (bearing-rotation-corrected)
+    return shotKF.get();
+  } else {
+    // AI OFF: KF starts at (0,0) — must discover bias from scratch.
+    // First 3 BO shots explore randomly (n_init phase, mirrors real BO).
+    const boIdx = n - BASELINE_SHOTS;
+    if(boIdx < 3) {
+      return { dp:0, db:(Math.random()*2-1)*0.6, dv:(Math.random()*2-1)*4.5 };
+    }
+    return shotKF.get();
+  }
+}
+
+function phaseLabel(n) {
+  // Artillery FCS engagement phases — FM 6-30 / FM 6-40 doctrine:
+  //
+  // REGISTRATION   First round fired uncorrected. FCS observes fall of
+  //                shot to measure systematic bias (range error, deflection
+  //                error). No correction applied — this is the baseline.
+  //
+  // ADJUSTMENT     FCS computes and applies corrections from registration
+  //                data. Iterative: each round's fall of shot refines the
+  //                fire control solution. ForgettingRLS is the estimator.
+  //
+  // FIRE FOR EFFECT  Fire control solution locked. Mission rounds fired
+  //                  with the corrected QE and deflection. FM 6-30:
+  //                  "fire which is delivered after the MPI is within the
+  //                  desired distance of the target."
+  if(n < BASELINE_SHOTS)
+    return ['REGISTRATION',   'Firing registration round…'];
+  if(n < BASELINE_SHOTS + BO_SHOTS)
+    return ['ADJUSTMENT',     aiOn ? 'FCS computing corrections…' : 'Manual adjustment…'];
+  return ['FIRE FOR EFFECT',  'Applying fire control solution'];
+}
+
+// ── Noise floor: theoretical minimum achievable CEP (irreducible stochastic) ─
+// Even a perfect correction cannot beat this — it's set by sigma_pitch, sigma_yaw,
+// sigma_v0. Helps users interpret short-range results correctly.
+function noiseFloorCEP() {
+  if(!sol) return null;
+  const pitchNoise = sol.range * engNoise.sp * Math.PI / 180;
+  const yawNoise   = sol.range * engNoise.sy * Math.PI / 180;
+  const v0Noise    = engNoise.sv * sol.tof;
+  // Rayleigh 50th percentile ≈ σ × sqrt(ln4) ≈ σ × 1.177
+  const sigma = Math.sqrt(pitchNoise**2 + yawNoise**2 + v0Noise**2);
+  return sigma * 1.177 * 0.5; // CEP50 from combined noise
+}
+
+// DISABLED: the browser must never compute its own fire solution.
+// The Python backend is the single source of truth for all ballistic solutions.
+// If the backend is unreachable, showBackendOffline() blocks the UI — the
+// simulation must fail loudly, not substitute a simplified local result.
+// The function body is intentionally blanked; the name is kept so that any
+// accidental call-site produces null (not an exception) and can be traced.
+function localSolve(x, y, z, v0) {
+  return null;
+}
+
+// ═══ Camera ═══════════════════════════════════════════════════════
+const _cp=new THREE.Vector3(), _cl=new THREE.Vector3();
+function updateCam() {
+  const th=camTheta*Math.PI/180, ph=camPhi*Math.PI/180;
+  if(camMode===0){
+    cam.position.set(
+      camTgt.x+camDist*Math.cos(ph)*Math.sin(th),
+      camTgt.y+camDist*Math.sin(ph),
+      camTgt.z+camDist*Math.cos(ph)*Math.cos(th));
+    cam.lookAt(camTgt);
+  } else if(camMode===1&&projMesh.visible){
+    const cur=trajCorr[Math.min(projIdx,trajCorr.length-1)];
+    const nxt=trajCorr[Math.min(projIdx+5,trajCorr.length-1)];
+    const dir=new THREE.Vector3().subVectors(nxt,cur).normalize();
+    _cp.copy(cur).addScaledVector(dir,-22); _cp.y+=10;
+    _cl.copy(cur).addScaledVector(dir,14);  _cl.y=Math.max(_cl.y,0);
+    cam.position.lerp(_cp,.10); cam.lookAt(_cl);
+  } else if(camMode===2){
+    cam.position.set(camTgt.x,camDist*.88,camTgt.z); cam.lookAt(camTgt);
+  }
+}
+updateCam();
+
+let dragging=false, lx=0, ly=0;
+const startDrag=(x,y)=>{ dragging=true; lx=x; ly=y; };
+const onDrag=(x,y)=>{
+  if(placing){
+    mouseVec.set(x/innerWidth*2-1,-(y/innerHeight)*2+1);
+    raycaster.setFromCamera(mouseVec,cam);
+    const h=raycaster.intersectObject(gnd);
+    if(h.length) ghostRing.position.set(h[0].point.x,.1,h[0].point.z);
+  }
+  if(!dragging||placing) return;
+  camTheta-=(x-lx)*.36; camPhi=Math.max(8,Math.min(80,camPhi+(y-ly)*.26));
+  lx=x; ly=y; updateCam();
+};
+cnv.addEventListener('mousedown',e=>{ if(e.button===0) startDrag(e.clientX,e.clientY); });
+window.addEventListener('mouseup',()=>dragging=false);
+window.addEventListener('mousemove',e=>onDrag(e.clientX,e.clientY));
+cnv.addEventListener('wheel',e=>{
+  camDist=Math.max(30,Math.min(900,camDist+e.deltaY*.42)); updateCam();
+},{passive:true});
+
+let td=0;
+cnv.addEventListener('touchstart',e=>{
+  if(e.touches.length===1) startDrag(e.touches[0].clientX,e.touches[0].clientY);
+  else if(e.touches.length===2) td=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+},{passive:true});
+cnv.addEventListener('touchmove',e=>{
+  if(e.touches.length===1) onDrag(e.touches[0].clientX,e.touches[0].clientY);
+  else if(e.touches.length===2){
+    const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    camDist=Math.max(30,Math.min(900,camDist-(d-td)*.75)); td=d; updateCam();
+  }
+},{passive:true});
+cnv.addEventListener('touchend',()=>dragging=false,{passive:true});
+
+cnv.addEventListener('click',e=>{
+  if(!placing) return;
+  mouseVec.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);
+  raycaster.setFromCamera(mouseVec,cam);
+  const h=raycaster.intersectObject(gnd);
+  if(h.length){ placeTarget(h[0].point.x,0,h[0].point.z); togglePlace(); }
+});
+
+window.addEventListener('resize',()=>{
+  renderer.setSize(innerWidth,innerHeight);
+  cam.aspect=innerWidth/innerHeight; cam.updateProjectionMatrix();
+});
+
+// ═══ Actions ══════════════════════════════════════════════════════
+async function placeTarget(x, y, z) {
+  if(Math.hypot(x,z)<30) z=160;
+  let d;
+  try {
+    const res=await fetch('/api/solve',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({x,y:0,z,v0:V0})});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    d=await res.json();
+  } catch(e) {
+    // Backend unreachable — DO NOT fall back to local JS. Fail loudly.
+    setSrv(false);
+    showBackendOffline();
+    return;
+  }
+  if(!d.reachable){ alert('Unreachable: '+(d.error||'out of range')); return; }
+  solData=d;
+  setSrv(true);
+  hideBackendOffline();
+  target={x,y:0,z};
+  sol={
+    pR:solData.pitch_deg*Math.PI/180, pD:solData.pitch_deg,
+    bR:Math.atan2(x,z),              bD:Math.atan2(x,z)*180/Math.PI,
+    tof:solData.tof, maxH:solData.max_height, range:solData.horiz_range
+  };
+  tgtG.position.set(x,0,z); tgtG.visible=true;
+  // Reset engagement for new target — freeze env offset and weapon class now
+  engEnvDv0 = envV0Bias();
+  engNoise   = {...WEAPON_CLASSES[selectedWeaponClass]};
+  lockedCorrection = null;
+  shotHistory=[]; correction={dp:0,db:0,dv:0};
+  bestMiss=Infinity; bestCorr={dp:0,db:0,dv:0};
+  shotKF = new ForgettingRLS(); // reset KF for new target
+  impactDots3D.forEach(d=>scene.remove(d)); impactDots3D.length=0;
+  document.getElementById('shot-bars').innerHTML='';
+  ['g-base','g-ai'].forEach(id=>{ document.getElementById(id).textContent='—'; });
+  document.getElementById('g-imp').textContent='—';
+  document.getElementById('g-imp').style.color='';
+  ['ep-shot','ep-phase','ep-miss','ep-best','ep-dp','ep-dv'].forEach(id=>{
+    document.getElementById(id).textContent='—';
+  });
+  document.getElementById('ep-trend').textContent     = '—';
+  document.getElementById('ep-trend-dir').textContent = '—';
+  redrawGrouping();
+  document.getElementById('btn-fire').disabled=false;
+  document.getElementById('btn-auto').disabled=false;
+  updateHUD(); setBadge('target');
+  camTgt.set(x*.25,0,z*.25); updateCam();
+}
+
+function randomTarget() {
+  if(state==='firing') return;
+  const a=(Math.random()*110-55)*Math.PI/180, r=110+Math.random()*280;
+  clearTraj(); hideResult();
+  placeTarget(Math.sin(a)*r, 0, Math.cos(a)*r);
+}
+
+function togglePlace() {
+  placing=!placing;
+  document.getElementById('btn-place').classList.toggle('on',placing);
+  ghostRing.visible=placing;
+  document.body.classList.toggle('placing',placing);
+  const sub=document.getElementById('sb-badge-sub');
+  if(sub){ sub.style.display=placing?'inline':'none'; sub.textContent=placing?'Click ground to place target':''; }
+}
+
+function toggleAI() {
+  aiOn=!aiOn;
+  const btn=document.getElementById('btn-ai');
+  btn.className='btn '+(aiOn?'btn-ai-on':'btn-ai-off');
+  btn.textContent='FCS '+(aiOn?'On':'Off');
+  if(sol) updateHUD();
+}
+
+const CAM_NAMES=['Orbit','Follow','Top'];
+function cycleCam() {
+  camMode=(camMode+1)%3;
+  document.getElementById('btn-cam').textContent=CAM_NAMES[camMode];
+  if(camMode!==1) updateCam();
+}
+
+// ═══ FIRE ONE SHOT (per-shot learning loop) ════════════════════════
+function fireShot() {
+  if(!target||!sol||state==='firing') return;
+  if(shotHistory.length >= TOTAL_SHOTS) return;
+
+  const n = shotHistory.length;
+  correction = correctionForShot(n);
+  const [pl] = phaseLabel(n);
+
+  clearTraj(); state = 'firing';
+  document.body.classList.add('inflight');
+  setBadge('aim');
+
+  // Animation trajectory — use corrected + bias (deterministic, for visual)
+  const b = applyBias(sol.pD+correction.dp, sol.bD+correction.db, V0+correction.dv);
+  trajCorr = makeTraj(b.pitch*Math.PI/180, b.bearing*Math.PI/180, b.v0);
+
+  // Also show a baseline arc for the first 3 shots
+  if(n === 0) {
+    const bBase = applyBias(sol.pD, sol.bD, V0);
+    trajBias = makeTraj(bBase.pitch*Math.PI/180, bBase.bearing*Math.PI/180, bBase.v0);
+    lnBias = makeLine(trajBias, 0xff2255, true);
+  }
+  lnCorr = makeLine(trajCorr, 0xff6020, false);
+
+  // Aim turret
+  const tgtBearing = Math.atan2(target.x, target.z);
+  const tgtPitch   = -sol.pR;
+  let aimed = false;
+  aimTimer = setInterval(() => {
+    turrP.rotation.y += (tgtBearing - turrP.rotation.y) * .09;
+    barrP.rotation.x += (tgtPitch   - barrP.rotation.x) * .09;
+    if(Math.abs(turrP.rotation.y - tgtBearing) < .012
+      && Math.abs(barrP.rotation.x - tgtPitch) < .012 && !aimed) {
+      aimed = true; clearInterval(aimTimer); aimTimer = null;
+      muzzFlash.intensity = 30; setTimeout(() => muzzFlash.intensity = 0, 70);
+      setTimeout(() => { muzzFlash.intensity = 14; setTimeout(() => muzzFlash.intensity = 0, 50); }, 105);
+
+      // Simulate actual physics impact (with noise)
+      const impact = fireSingleShot(correction.dp, correction.db, correction.dv);
+      if(!impact) { state = 'idle'; return; }
+
+      // Animate projectile
+      projMesh.visible = true; animStart = null; projIdx = 0;
+      setBadge('fire');
+      document.getElementById('tele').classList.add('show');
+      document.getElementById('tele-tof').textContent = sol.tof.toFixed(2)+' s';
+
+      const totalMs = 3400 / spd(), len = trajCorr.length;
+      let peakY = 0;
+
+      function step(ts) {
+        if(!animStart) animStart = ts;
+        const t = Math.min((ts - animStart) / totalMs, 1);
+        projIdx = Math.floor(t * (len-1));
+        const pos = trajCorr[projIdx];
+        projMesh.position.copy(pos);
+        if(camMode === 1) updateCam();
+        if(pos.y > peakY) { peakY = pos.y; showApex(pos); }
+        document.getElementById('tele-ela').textContent = (sol.tof*t).toFixed(2)+' s';
+        document.getElementById('tele-alt').textContent = pos.y.toFixed(1)+' m';
+        document.getElementById('tele-vel').textContent = Math.sqrt(V0*V0 - 2*G*Math.max(0,pos.y)).toFixed(0)+' m/s';
+        if(t < 1) { animId = requestAnimationFrame(step); return; }
+
+        // Landing
+        projMesh.visible = false; hideApex();
+        document.getElementById('tele').classList.remove('show');
+        document.body.classList.remove('inflight');
+        expandRing(impact, impact.miss < 3);
+        add3DImpactDot(impact, n);
+
+        // Record shot
+        shotHistory.push({...impact, shotN:n, corr:{...correction}});
+        if(impact.miss < bestMiss) { bestMiss = impact.miss; bestCorr = {...correction}; }
+
+        // Artillery FCS doctrine (FM 6-40):
+        // Correction estimator updates ONLY during Adjustment phase.
+        // Registration round (n=0) is fired uncorrected — updating from it
+        // biases the prior before the FCS has any correction applied.
+        // Fire for Effect rounds (n >= BASELINE_SHOTS + BO_SHOTS) use the
+        // locked fire control solution — no further updates.
+        if(n >= BASELINE_SHOTS && n < BASELINE_SHOTS + BO_SHOTS && sol) {
+          const {errRange, errLat} = rotateErrors(impact.errX, impact.errZ);
+          const tofCos = sol.tof * Math.cos(sol.pR);
+          shotKF.update(correction.db, correction.dv, errLat, errRange, sol.range, tofCos);
+        }
+
+        // Update all panels
+        redrawGrouping(); updateEngPanel(impact.miss, n); updateGroupingStats();
+
+        // Phase transition messages
+        if(n === BASELINE_SHOTS-1)
+          showPhaseOverlay('ADJUSTMENT', aiOn ? 'FCS computing corrections…' : 'Manual adjustment…');
+        else if(n === BASELINE_SHOTS+BO_SHOTS-1) {
+          // MPI-group lock (FM 6-40): refine the locked solution from the mean
+          // of the last 3 adjustment round impacts before FFE begins.
+          const adjShots = shotHistory.filter(s => s.shotN >= BASELINE_SHOTS && s.shotN < BASELINE_SHOTS+BO_SHOTS);
+          const last3    = adjShots.slice(-3);
+          if(last3.length > 0 && sol) {
+            const tofCos = sol.tof * Math.cos(sol.pR);
+            let sumErrRange = 0, sumErrLat = 0;
+            last3.forEach(s => {
+              const {errRange, errLat} = rotateErrors(s.errX, s.errZ);
+              sumErrRange += errRange; sumErrLat += errLat;
+            });
+            const avgErrRange = sumErrRange / last3.length;
+            const avgErrLat   = sumErrLat   / last3.length;
+            const db_res = -avgErrLat   / (sol.range * Math.PI / 180);
+            const dv_res = -avgErrRange / Math.max(tofCos, 0.01);
+            const kfNow  = shotKF.get();
+            const preLock = {...kfNow};
+            lockedCorrection = {
+              dp: analyticalPreCorr().dp,
+              db: kfNow.db + db_res,
+              dv: kfNow.dv + dv_res,
+            };
+            console.log('MPI lock: pre=', preLock, 'residual=', {db_res: +db_res.toFixed(4), dv_res: +dv_res.toFixed(3)}, 'post=', lockedCorrection);
+          } else {
+            lockedCorrection = shotKF.get();
+          }
+          showPhaseOverlay('FIRE FOR EFFECT', `Best MPI: ${bestMiss.toFixed(2)} m`);
+        }
+        else if(n === TOTAL_SHOTS-1) {
+          const bCEP = Math.max(baselineCEP(), expectedBaselineMiss()), aCEP = aiCEP();
+          const imp = bCEP > 0 ? ((bCEP-aCEP)/bCEP*100) : 0;
+          showPhaseOverlay('MISSION COMPLETE', `+${imp.toFixed(1)}% dispersion reduction`);
+          const floor = noiseFloorCEP() || 3;
+          const isOnTarget = bestMiss < floor * 2.5;
+          setBadge(isOnTarget ? 'hit' : 'aim');
+          showFinalResult(bCEP, aCEP, imp, isOnTarget);
+        }
+
+        state = 'idle';
+        if(autoFiring && shotHistory.length < TOTAL_SHOTS)
+          autoTimer = setTimeout(fireShot, 1200 / spd());
+        else if(autoFiring) { autoFiring = false; updateAutoBtn(); }
+      }
+      animId = requestAnimationFrame(step);
+    }
+  }, 16);
+}
+
+// ── Auto-fire ────────────────────────────────────────────────────
+function toggleAuto() {
+  autoFiring = !autoFiring; updateAutoBtn();
+  if(autoFiring && state === 'idle' && shotHistory.length < TOTAL_SHOTS) fireShot();
+}
+function updateAutoBtn() {
+  const b = document.getElementById('btn-auto');
+  b.textContent = autoFiring ? '⏹ Stop' : '⟳ Auto Fire';
+  b.style.color = autoFiring ? 'var(--accent)' : 'var(--fire)';
+  b.style.borderColor = autoFiring ? 'rgba(0,225,255,.3)' : 'rgba(255,107,26,.25)';
+}
+
+// ── CEP helpers ───────────────────────────────────────────────────
+function baselineCEP() {
+  const b = shotHistory.slice(0, Math.min(BASELINE_SHOTS, shotHistory.length));
+  if(!b.length) return Infinity;
+  return b.map(s=>s.miss).sort((a,c)=>a-c)[Math.floor(b.length*.5)];
+}
+function aiCEP() {
+  const a = shotHistory.slice(BASELINE_SHOTS);
+  if(!a.length) return Infinity;
+  return a.map(s=>s.miss).sort((a,c)=>a-c)[Math.floor(a.length*.5)];
+}
+
+function expectedBaselineMiss() {
+  if(!sol || !solData) return baselineCEP();
+  // Expected miss without correction = range error from systematic bias
+  const cosP = Math.cos(sol.pR);
+  const sinP = Math.sin(sol.pR);
+  const rangeBias  = Math.abs(solData.bias.v0)   * sol.tof * cosP;
+  const pitchBias  = Math.abs(solData.bias.pitch) * sol.range * Math.PI / 180;
+  const yawBias    = Math.abs(solData.bias.yaw)   * sol.range * Math.PI / 180;
+  return Math.sqrt(rangeBias**2 + pitchBias**2 + yawBias**2);
+}
+
+// Artillery MPI Trend — rolling average of last N round miss distances.
+// FM 6-40: the Mean Point of Impact (MPI) is the primary accuracy metric
+// in artillery fire control. Individual rounds scatter around the MPI due
+// to irreducible dispersion. The MPI trend shows FCS convergence clearly.
+// N=4 rounds gives a window long enough to damp noise, short enough to
+// track genuine improvement between registration and adjustment phases.
+function mpiTrend() {
+  if(shotHistory.length < 2) return null;
+  const window = shotHistory.slice(-4);
+  return window.reduce((sum, s) => sum + s.miss, 0) / window.length;
+}
+
+// Direction of MPI trend: negative = converging, positive = diverging.
+function mpiTrendDirection() {
+  if(shotHistory.length < 3) return 0;
+  const recent = shotHistory.slice(-3).map(s => s.miss);
+  const older  = shotHistory.slice(-6, -3).map(s => s.miss);
+  if(older.length === 0) return 0;
+  const recentAvg = recent.reduce((a,b) => a+b, 0) / recent.length;
+  const olderAvg  = older.reduce((a,b) => a+b, 0)  / older.length;
+  return recentAvg - olderAvg; // negative = improving
+}
+
+// ═══ 2D GROUPING CANVAS ════════════════════════════════════════════
+const gc = document.getElementById('gc');
+const gctx = gc.getContext('2d');
+const GW = 182, GH = 182, GCX = GW/2, GCY = GH/2;
+
+function redrawGrouping() {
+  gctx.clearRect(0,0,GW,GH);
+  gctx.fillStyle = '#000b18'; gctx.fillRect(0,0,GW,GH);
+
+  // Auto-scale: fit all observed errors plus noise floor in canvas
+  const floor = noiseFloorCEP() || 2;
+  const maxObs = Math.max(...shotHistory.map(s=>s.miss), floor*3, 3);
+  const scale = (GW/2 - 10) / maxObs;
+
+  // Ring radii: noise floor + 2× and 4× noise floor
+  [[floor,'rgba(0,232,122,.35)'],[floor*2,'rgba(0,210,255,.18)'],[floor*4,'rgba(0,210,255,.10)']].forEach(([r,c])=>{
+    gctx.strokeStyle=c; gctx.lineWidth=1; gctx.beginPath();
+    gctx.arc(GCX,GCY,r*scale,0,Math.PI*2); gctx.stroke();
+  });
+  // Noise floor label
+  gctx.fillStyle='rgba(0,232,122,.35)'; gctx.font='7px monospace'; gctx.textAlign='center';
+  gctx.fillText(`≈${floor.toFixed(1)}m floor`,GCX,GCY-floor*scale-3);
+
+  // Centre dot
+  gctx.fillStyle='#00d2ff'; gctx.beginPath(); gctx.arc(GCX,GCY,3,0,Math.PI*2); gctx.fill();
+
+  // Shot dots
+  const COLORS=['#ff2255','#ff3344','#ff6020','#ff9900','#ffcc00','#88ee44','#00e87a'];
+  shotHistory.forEach((s,i) => {
+    const t = i/Math.max(1,TOTAL_SHOTS-1);
+    const ci = Math.min(COLORS.length-1, Math.floor(t*(COLORS.length-1)));
+    const px = GCX + s.errX*scale, py = GCY - s.errZ*scale;
+    gctx.fillStyle = COLORS[ci]; gctx.globalAlpha = .88;
+    gctx.beginPath(); gctx.arc(
+      Math.max(4,Math.min(GW-4,px)), Math.max(4,Math.min(GH-4,py)), 3.8, 0, Math.PI*2);
+    gctx.fill();
+    gctx.fillStyle='rgba(255,255,255,.55)'; gctx.font='7px monospace'; gctx.textAlign='left';
+    gctx.globalAlpha=.65;
+    gctx.fillText(i+1, Math.max(6,Math.min(GW-10,px+5)), Math.max(9,Math.min(GH-2,py-4)));
+    gctx.globalAlpha=1;
+  });
+}
+
+function updateGroupingStats() {
+  const bCEP = baselineCEP(), aCEP = aiCEP();
+  document.getElementById('g-base').textContent = isFinite(bCEP) ? bCEP.toFixed(1)+'m' : '—';
+  if(isFinite(aCEP)) {
+    document.getElementById('g-ai').textContent = aCEP.toFixed(1)+'m';
+    const imp = bCEP>0 ? (bCEP-aCEP)/bCEP*100 : 0;
+    const el = document.getElementById('g-imp');
+    el.textContent = (imp>=0?'+':'')+imp.toFixed(1)+'%';
+    el.style.color = imp>=0 ? 'var(--hit)' : 'var(--miss)';
+  }
+}
+
+// ═══ ENGAGEMENT PANEL ══════════════════════════════════════════════
+function updateEngPanel(miss, n) {
+  const [pl] = phaseLabel(n);
+  document.getElementById('ep-shot').textContent = `RND ${n+1} / ${TOTAL_SHOTS}`;
+  document.getElementById('ep-phase').textContent = pl;
+  const mEl = document.getElementById('ep-miss');
+  const floor = noiseFloorCEP() || 0;
+  mEl.textContent = miss.toFixed(2)+' m';
+  mEl.className = 'big-num '+(miss < floor*1.5 ? 'ht' : miss < floor*4 ? 'fr' : 'ms');
+  document.getElementById('ep-best').textContent = isFinite(bestMiss) ? bestMiss.toFixed(2)+' m' : '—';
+  document.getElementById('ep-dp').textContent = (correction.dp>=0?'+':'')+correction.dp.toFixed(3)+'°';
+  document.getElementById('ep-dv').textContent = (correction.dv>=0?'+':'')+correction.dv.toFixed(2)+' m/s';
+  const flEl = document.getElementById('ep-floor');
+  if(floor > 0) {
+    flEl.textContent = `~${floor.toFixed(1)} m`;
+    flEl.title = 'Minimum achievable CEP from stochastic noise alone';
+  }
+  // Progress bar
+  const prog = document.getElementById('prog-fill');
+  if(prog) prog.style.width = (shotHistory.length / TOTAL_SHOTS * 100)+'%';
+  // Artillery MPI Trend display
+  const trend = mpiTrend();
+  const tEl = document.getElementById('ep-trend');
+  const dEl = document.getElementById('ep-trend-dir');
+  if(trend !== null && tEl) {
+    tEl.textContent = trend.toFixed(2) + ' m';
+    const tFloor = noiseFloorCEP() || 3;
+    tEl.className = 'stat-v ' + (trend < tFloor * 1.5 ? 'ht' : trend < tFloor * 3 ? 'fr' : 'ms');
+  }
+  if(dEl) {
+    const dir = mpiTrendDirection();
+    if(Math.abs(dir) < 0.5)       { dEl.textContent = '→ STABLE';     dEl.className = 'stat-v ht'; }
+    else if(dir < 0)              { dEl.textContent = '↓ CONVERGING'; dEl.className = 'stat-v ht'; }
+    else                          { dEl.textContent = '↑ DIVERGING';  dEl.className = 'stat-v ms'; }
+  }
+  // Shot bars
+  const bars = document.getElementById('shot-bars'); bars.innerHTML='';
+  const maxM = Math.max(...shotHistory.map(s=>s.miss), floor*2, 0.1);
+  const COLORS=['#FF2040','#FF6B1A','#FFB300','#00E1FF','#00FF94'];
+  shotHistory.forEach((s,i) => {
+    const t = i/Math.max(1,TOTAL_SHOTS-1);
+    const c2 = COLORS[Math.min(4,Math.floor(t*4))];
+    const pct = (1 - s.miss/maxM)*100;
+    const row=document.createElement('div'); row.className='sb-row';
+    row.innerHTML=`<span class="sb-n">${i+1}</span>
+      <div class="sb-track"><div class="sb-fill" style="width:${pct}%;background:${c2}"></div></div>
+      <span class="sb-miss">${s.miss.toFixed(1)}m</span>`;
+    bars.appendChild(row);
+  });
+}
+
+// ── 3D impact dot (persistent sphere in scene) ─────────────────────
+function add3DImpactDot(impact, n) {
+  const t = n/(TOTAL_SHOTS-1);
+  const cols=[0xff2255,0xff6020,0xffaa00,0x00d2ff,0x00e87a];
+  const c = cols[Math.min(4,Math.floor(t*4))];
+  const d = new THREE.Mesh(new THREE.SphereGeometry(.55,8,8),
+    new THREE.MeshPhongMaterial({color:c,emissive:c,emissiveIntensity:.6}));
+  d.position.set(impact.x,.55,impact.z);
+  scene.add(d); impactDots3D.push(d);
+}
+
+// ── Phase overlay flash ────────────────────────────────────────────
+function showPhaseOverlay(label, msg) {
+  const ov=document.getElementById('phase-ov');
+  document.getElementById('phase-lbl').textContent=label;
+  document.getElementById('phase-msg').textContent=msg;
+  document.getElementById('phase-msg').style.color=
+    label.includes('COMPLETE')?'var(--hit)':label.includes('VERIFIED')?'var(--accent)':'var(--fire)';
+  ov.classList.add('show');
+  setTimeout(()=>ov.classList.remove('show'),3000);
+}
+
+// ── Final result overlay (reuses existing #result) ─────────────────
+function showFinalResult(bCEP, aCEP, imp, hit) {
+  setTimeout(() => showResult(bCEP, aCEP, imp, hit), 400);
+}
+
+function doReset() {
+  if(animId){ cancelAnimationFrame(animId); animId=null; }
+  if(aimTimer){ clearInterval(aimTimer); aimTimer=null; }
+  if(autoTimer){ clearTimeout(autoTimer); autoTimer=null; }
+  autoFiring=false; updateAutoBtn();
+  state='idle'; setBadge('idle');
+  clearTraj(); hideResult(); hideApex();
+  document.getElementById('tele').classList.remove('show');
+  document.body.classList.remove('inflight','placing');
+  solData=null; target=null; sol=null; placing=false;
+  ghostRing.visible=false;
+  document.getElementById('btn-place').classList.remove('on');
+  const _bsub=document.getElementById('sb-badge-sub'); if(_bsub) _bsub.style.display='none';
+  tgtG.visible=false;
+  turrP.rotation.y=0; barrP.rotation.x=0;
+  projMesh.visible=false;
+  document.getElementById('btn-fire').disabled=true;
+  document.getElementById('btn-auto').disabled=true;
+  ['h-range','h-bearing','h-height','h-elev','h-azim','h-v0','h-tof',
+   'h-alt','h-dp','h-db','h-dv','h-src','h-envdv'].forEach(id=>hv(id,'—','dim'));
+  // Clear engagement state
+  engEnvDv0 = 0;
+  engNoise   = {...WEAPON_CLASSES[selectedWeaponClass]};
+  lockedCorrection = null;
+  shotHistory=[]; correction={dp:0,db:0,dv:0};
+  bestMiss=Infinity; bestCorr={dp:0,db:0,dv:0};
+  shotKF = new ForgettingRLS(); // reset KF
+  impactDots3D.forEach(d=>scene.remove(d)); impactDots3D.length=0;
+  // Reset panels
+  document.getElementById('shot-bars').innerHTML='';
+  const _prog=document.getElementById('prog-fill'); if(_prog) _prog.style.width='0%';
+  ['g-base','g-ai'].forEach(id=>{ document.getElementById(id).textContent='—'; });
+  const _gImp=document.getElementById('g-imp'); _gImp.textContent='—'; _gImp.style.color='';
+  ['ep-shot','ep-phase','ep-miss','ep-best','ep-dp','ep-dv'].forEach(id=>{
+    document.getElementById(id).textContent='—';
+  });
+  document.getElementById('ep-trend').textContent     = '—';
+  document.getElementById('ep-trend-dir').textContent = '—';
+  document.getElementById('phase-ov').classList.remove('show');
+  redrawGrouping();
+}
+
+// ═══ Scene helpers ═════════════════════════════════════════════════
+function makeLine(pts,color,dashed){
+  const geo=new THREE.BufferGeometry().setFromPoints(pts);
+  let line;
+  if(dashed){
+    const mat=new THREE.LineDashedMaterial({color,dashSize:3,gapSize:2,
+      transparent:true,opacity:.6});
+    line=new THREE.Line(geo,mat); line.computeLineDistances();
+  } else {
+    line=new THREE.Line(geo,new THREE.LineBasicMaterial({color,transparent:true,opacity:.88}));
+  }
+  scene.add(line); return line;
+}
+
+function clearTraj(){
+  [lnBias,lnCorr].forEach(l=>{ if(l) scene.remove(l); }); lnBias=lnCorr=null;
+  impactMarkers.forEach(m=>scene.remove(m)); impactMarkers=[];
+  if(animId){ cancelAnimationFrame(animId); animId=null; }
+  projMesh.visible=false; hideApex();
+}
+
+function expandRing(pos,hit){
+  const c=hit?0x00e87a:0xff2255;
+  impRing.material.color.setHex(c); impRing.material.opacity=1; impRing.scale.set(1,1,1);
+  impRing.position.set(pos.x,.15,pos.z); impRing.visible=true;
+  let s=1;
+  (function go(){s+=.6; impRing.scale.set(s,s,1); impRing.material.opacity-=.042;
+    if(impRing.material.opacity>0) requestAnimationFrame(go);
+    else impRing.visible=false;})();
+}
+
+function addMark(pos,type){
+  const cols={bad:0xff2255,hit:0x00e87a,near:0xff6020};
+  const c=cols[type]||0xff6020;
+  const m=new THREE.Mesh(new THREE.SphereGeometry(.65,8,8),
+    new THREE.MeshPhongMaterial({color:c,emissive:c,emissiveIntensity:.7}));
+  m.position.set(pos.x,.65,pos.z); scene.add(m); impactMarkers.push(m);
+  if(type==='bad'){
+    [45,-45].forEach(a=>{
+      const cr=new THREE.Mesh(new THREE.BoxGeometry(6,.2,.2),
+        new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:.55}));
+      cr.position.set(pos.x,.18,pos.z); cr.rotation.y=a*Math.PI/180;
+      scene.add(cr); impactMarkers.push(cr);
+    });
+  } else {
+    const r=new THREE.Mesh(new THREE.RingGeometry(1.8,2.4,32),
+      new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:.4,side:THREE.DoubleSide}));
+    r.rotation.x=-Math.PI/2; r.position.set(pos.x,.18,pos.z);
+    scene.add(r); impactMarkers.push(r);
+  }
+}
+
+// ═══ Apex label ════════════════════════════════════════════════════
+const apexEl=document.getElementById('apex'); let lastApexY=0;
+function showApex(pos){
+  if(pos.y<lastApexY-.5) return; lastApexY=pos.y;
+  const v=pos.clone().project(cam);
+  apexEl.style.left=(v.x+1)/2*innerWidth+'px';
+  apexEl.style.top=(-v.y+1)/2*innerHeight+'px';
+  apexEl.textContent=pos.y.toFixed(1)+' m';
+  apexEl.style.display='block';
+}
+function hideApex(){ apexEl.style.display='none'; lastApexY=0; }
+
+// ═══ HUD ═══════════════════════════════════════════════════════════
+function hv(id,val,cls=''){
+  const el=document.getElementById(id); if(!el) return;
+  const map={accent:'ac',fire:'fr',dim:'dm',hit:'ht',miss:'ms'};
+  const c=map[cls]||cls;
+  el.className='stat-v'+(c?' '+c:''); el.textContent=val;
+}
+function setCorrBar(fillId, val, maxVal, color) {
+  const fill=document.getElementById(fillId); if(!fill) return;
+  const pct=Math.min(1,Math.abs(val)/maxVal)*50;
+  fill.style.background=color;
+  if(val>=0){ fill.style.left='50%'; fill.style.width=pct+'%'; }
+  else{ fill.style.left=(50-pct)+'%'; fill.style.width=pct+'%'; }
+}
+function updateHUD(){
+  if(!sol||!target) return;
+  const c=(aiOn&&solData)?getPINN():{dp:0,db:0,dv:0};
+  hv('h-range',   sol.range.toFixed(1)+' m','accent');
+  hv('h-bearing', sol.bD.toFixed(1)+'°');
+  hv('h-height',  target.y.toFixed(0)+' m');
+  hv('h-elev',    sol.pD.toFixed(2)+'°');
+  hv('h-azim',    sol.bD.toFixed(2)+'°');
+  hv('h-v0',      V0+' m/s');
+  hv('h-tof',     sol.tof.toFixed(2)+' s');
+  hv('h-alt',     sol.maxH.toFixed(1)+' m');
+  if(aiOn){
+    hv('h-dp',(c.dp>=0?'+':'')+c.dp.toFixed(3)+'°','fire');
+    hv('h-db',(c.db>=0?'+':'')+c.db.toFixed(3)+'°','fire');
+    hv('h-dv',(c.dv>=0?'+':'')+c.dv.toFixed(2)+' m/s','fire');
+    const src = solData?.pinn?.source || 'none';
+    const srcLabel = src.startsWith('pinn') ? 'ballistic_table' :
+                     src === 'sbe'           ? 'barrel_state_est' :
+                     src === 'offline'       ? 'manual_tables'    : src;
+    hv('h-src', srcLabel, (src !== 'offline' && src !== 'none') ? 'hit' : 'dim');
+    setCorrBar('cf-dp',c.dp,2.0,'var(--fire)');
+    setCorrBar('cf-db',c.db,2.0,'var(--fire)');
+    setCorrBar('cf-dv',c.dv,10.0,'var(--fire)');
+  } else {
+    ['h-dp','h-db','h-dv','h-src'].forEach(id=>hv(id,'OFF','dim'));
+    ['cf-dp','cf-db','cf-dv'].forEach(id=>{ const f=document.getElementById(id); if(f){f.style.width='0%';} });
+  }
+  // ENV Δ MV: shows the feed-forward correction applied this engagement.
+  // Sign: positive when the correction adds velocity (e.g. cold propellant or worn barrel).
+  const ff = -engEnvDv0;
+  const envEl = document.getElementById('h-envdv');
+  if(envEl) {
+    if(ff === 0) { envEl.textContent = '—'; envEl.style.opacity = '0.35'; }
+    else { envEl.textContent = (ff>=0?'+':'')+ff.toFixed(2)+' m/s'; envEl.style.opacity = '1'; }
+  }
+}
+
+function showResult(mb,ma,imp,hit){
+  const el=document.getElementById('result');
+  const impEl=document.getElementById('res-imp');
+  impEl.textContent=(imp>=0?'+':'')+imp.toFixed(1)+'%';
+  impEl.style.color=hit?'var(--hit)':imp>0?'var(--fire)':'var(--miss)';
+  document.getElementById('res-label').textContent = hit ? '⊙  On Target' : '∿  Adjustment Required';
+  document.getElementById('res-base').textContent=mb.toFixed(2)+' m';
+  const aiEl=document.getElementById('res-ai');
+  aiEl.textContent=ma.toFixed(2)+' m';
+  aiEl.className='ri-v '+(ma<4?'ht':'fr');
+  el.classList.add('show');
+}
+function hideResult(){ document.getElementById('result').classList.remove('show'); }
+
+const BADGE_MAP = {
+  idle:   ['READY',           'b-idle'],
+  target: ['TARGET ACQUIRED', 'b-target'],
+  aim:    ['LAYING GUN',      'b-aim'],
+  fire:   ['FIRING',          'b-fire'],
+  hit:    ['ROUNDS COMPLETE', 'b-hit'],
+};
+function setBadge(s){
+  const [t,c]=BADGE_MAP[s]||BADGE_MAP.idle;
+  const b=document.getElementById('sb-badge'); if(b) b.className=c;
+  const bt=document.getElementById('sb-text'); if(bt) bt.textContent=t;
+}
+
+function setSrv(online){
+  const el=document.getElementById('sb-srv');
+  el.className=online?'on':'off';
+  el.textContent = online ? '⬤  FCS ONLINE' : '⬤  BALLISTICS OFFLINE';
+}
+
+function showBackendOffline(){
+  const el=document.getElementById('backend-offline');
+  if(el) el.style.display='flex';
+  ['btn-fire','btn-auto','btn-rand','btn-place'].forEach(id=>{
+    const b=document.getElementById(id); if(b) b.disabled=true;
+  });
+}
+
+function hideBackendOffline(){
+  const el=document.getElementById('backend-offline');
+  if(el) el.style.display='none';
+  ['btn-rand','btn-place'].forEach(id=>{
+    const b=document.getElementById(id); if(b) b.disabled=false;
+  });
+  // btn-fire and btn-auto remain gated by the normal target-placement flow
+}
+
+async function retryBackend(){
+  try {
+    const r=await fetch('/api/status');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    await r.json();
+    setSrv(true);
+    hideBackendOffline();
+  } catch(e){
+    setSrv(false);
+    const t=document.querySelector('.bo-title');
+    if(t){ t.textContent='⚠ STILL OFFLINE'; setTimeout(()=>t.textContent='⚠ BACKEND OFFLINE',1200); }
+  }
+}
+
+// ═══ Render loop ═══════════════════════════════════════════════════
+const t0=performance.now();
+renderer.setAnimationLoop(ts=>{
+  if(tgtG.visible) tgtLight.intensity=2.5+Math.sin((ts-t0)*.002)*.9;
+  if(camMode!==1) updateCam();
+  renderer.render(scene,cam);
+});
+
+// ── Drag from anywhere on .panel elements ───────────────────────
+(function () {
+  function initDrag(el) {
+    let active = false, ox = 0, oy = 0, sx = 0, sy = 0;
+    function down(e) {
+      if (e.target.closest('button,input,a')) return;
+      active = true;
+      el.classList.add('dragging');
+      const r = el.getBoundingClientRect();
+      el.style.cssText += ';position:fixed;left:' + r.left + 'px;top:' + r.top + 'px;right:auto;bottom:auto;transform:none;transition:none';
+      ox = r.left; oy = r.top;
+      sx = e.clientX ?? e.touches[0].clientX;
+      sy = e.clientY ?? e.touches[0].clientY;
+      e.preventDefault();
+    }
+    function move(e) {
+      if (!active) return;
+      const cx = e.clientX ?? e.touches[0].clientX;
+      const cy = e.clientY ?? e.touches[0].clientY;
+      el.style.left = Math.max(0, Math.min(innerWidth  - el.offsetWidth,  ox + cx - sx)) + 'px';
+      el.style.top  = Math.max(0, Math.min(innerHeight - el.offsetHeight, oy + cy - sy)) + 'px';
+    }
+    function up() {
+      if (!active) return;
+      active = false;
+      el.classList.remove('dragging');
+      el.style.transition = '';
+    }
+    el.addEventListener('mousedown',  down, { passive: false });
+    el.addEventListener('touchstart', down, { passive: false });
+    window.addEventListener('mousemove', move);
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('mouseup',   up);
+    window.addEventListener('touchend',  up);
+  }
+  // .panel elements (panel-sol, tele) drag individually
+  document.querySelectorAll('.panel').forEach(initDrag);
+  // #left-col drags as one unit — grouping and eng move together
+  initDrag(document.getElementById('left-col'));
+})();
+
+// ═══ Init ══════════════════════════════════════════════════════════
+doReset();
+redrawGrouping();
+fetch('/api/status')
+  .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+  .then(()=>{ setSrv(true); hideBackendOffline(); })
+  .catch(()=>{ setSrv(false); showBackendOffline(); });
+setTimeout(randomTarget, 450);
+</script>
+</body>
+</html>

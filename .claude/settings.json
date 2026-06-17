@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tests/test_bayesian_optimizer.py)",
+      "Bash(python tests/test_pipeline.py)",
+      "Bash(python pipeline.py)",
+      "Bash(python tests/test_data_generator.py)",
+      "Bash(python tests/test_range_table.py)",
+      "Bash(python main.py)",
+      "Bash(python rebuild_physics.py --fast)",
+      "Bash(python rebuild_physics.py)",
+      "Bash(python kalman_filter.py)",
+      "Bash(python -c \"from experiment import run_ablation, fixed_target_set; t = fixed_target_set\\(seed=99, n=5\\); df = run_ablation\\(t, verbose=False\\); print\\(df.groupby\\('label'\\)['improvement_pct'].mean\\(\\).round\\(1\\)\\)\")",
+      "Bash(python tests/test_kalman_filter.py)",
+      "Bash(python tests/test_experiment.py)",
+      "Bash(python tests/test_high_trajectory.py)",
+      "Bash(python tests/test_physics.py)",
+      "Bash(python tests/test_pinn.py)",
+      "Bash(python pinn_corrector.py)",
+      "Bash(python -c \"from pipeline import ARCSPipeline; p = ARCSPipeline\\(verbose=True\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import docx; print\\('available'\\)\")",
+      "Bash(python arcs_server.py > /tmp/arcs_server.log 2>&1 & *)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}
