@@ -22,7 +22,7 @@ Mach-dependent drag, Coriolis. Standard library + numpy only.
 
 import numpy as np
 
-from physics.atmosphere import atmosphere
+from physics.atmosphere import atmosphere, MAX_ALT
 from physics.drag import drag_coefficient
 
 G0 = 9.80665  # m/s^2, gravitational acceleration (matches ISA datum)
@@ -113,11 +113,30 @@ def _rk4_step(state, dt, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale):
 def integrate_trajectory(v0=827.0, elevation_deg=45.0, azimuth_deg=0.0,
                          mass=43.2, area=0.018869, Cd=CD_PLACEHOLDER, dt=0.01,
                          vacuum=False, wind=(0.0, 0.0, 0.0), met=None,
-                         use_g7=True, bc_scale=1.0):
+                         use_g7=True, bc_scale=1.0, target_height_m=0.0):
     """
-    Flies a point-mass shell through the ISA atmosphere until it returns to ground.
+    Flies a point-mass shell through the ISA atmosphere until it reaches the
+    target's altitude.
     vacuum=True disables drag (for validation against analytical formulas).
     Calls physics.atmosphere.atmosphere() each step for air density (when not vacuum).
+
+    target_height_m: altitude of the target relative to the gun (metres).
+        0.0 (default) = same level as the gun, reproduces the previous
+        same-level behaviour bit-for-bit. Positive = target above the gun (a
+        ridge); negative = target below the gun (a valley). Impact is detected
+        when the shell crosses this altitude on its DESCENDING branch only, so a
+        target above the gun is not falsely triggered while the shell climbs
+        through that altitude on the way up.
+
+        The frame is GUN-RELATIVE (gun at z = 0). For the air-density lookup the
+        gun is treated as sea level and any sub-gun altitude (z < 0, a valley)
+        uses clamped sea-level density. There is NO artificial limit on the
+        magnitude of the height difference — only genuine physical bounds:
+          * |target_height_m| must stay within the atmosphere model's valid
+            span (<= 20,000 m); outside that a clear ValueError is raised.
+          * if the target altitude is above the shell's apex it is physically
+            unreachable: the result dict has {"reached": False, ...} rather than
+            a crash or a fabricated number.
 
     use_g7: when True (the realistic default for real shots) the drag
         coefficient is computed per step from the published G7 Mach-dependent
@@ -153,6 +172,15 @@ def integrate_trajectory(v0=827.0, elevation_deg=45.0, azimuth_deg=0.0,
       steps          (number of integration steps)
     """
     wind = np.asarray(wind, dtype=float)
+
+    # Genuine physical bound only (no artificial threshold): the impact altitude
+    # must stay within the atmosphere model's validated span. Beyond +/-20 km the
+    # density model is not defined, so refuse it loudly.
+    if target_height_m > MAX_ALT or target_height_m < -MAX_ALT:
+        raise ValueError(
+            f"target_height_m must be within +/-{MAX_ALT:.0f} m of the gun "
+            f"(atmosphere model's valid range), got {target_height_m}")
+
     theta = np.radians(elevation_deg)
     phi = np.radians(azimuth_deg)
 
@@ -187,12 +215,33 @@ def integrate_trajectory(v0=827.0, elevation_deg=45.0, azimuth_deg=0.0,
         steps += 1
         apex = max(apex, new_state[2])
 
-        # Ground crossing on the way down: z goes from >= 0 to < 0.
-        if new_state[2] < 0.0:
-            # Linear interpolation on z between state (z0 >= 0) and new_state.
+        # Unreachable target: the shell is past apex (descending) and never
+        # climbed to the target altitude. Report it clearly rather than crash or
+        # fabricate a number.
+        if new_state[5] < 0.0 and apex < target_height_m:
+            return {
+                "reached": False,
+                "range_m": None,
+                "impact_x": None,
+                "impact_y": None,
+                "tof_s": None,
+                "apex_m": float(apex),
+                "impact_speed": None,
+                "steps": steps,
+                "reason": (f"target altitude {target_height_m:.1f} m not reached "
+                           f"(apex {apex:.1f} m)"),
+            }
+
+        # Impact when the shell crosses the target altitude on the DESCENDING
+        # branch: z goes from >= target_height_m down to < target_height_m. The
+        # "state[2] >= target_height_m" guard excludes the upward crossing while
+        # climbing. With target_height_m = 0 this reduces exactly to the former
+        # "new_state[2] < 0.0" ground test (state[2] >= 0 always holds there).
+        if new_state[2] < target_height_m <= state[2]:
+            # Linear interpolation on z to the exact target altitude.
             z0 = state[2]
             z1 = new_state[2]
-            frac = z0 / (z0 - z1)  # in [0, 1]
+            frac = (z0 - target_height_m) / (z0 - z1)  # in [0, 1]
             impact = state + frac * (new_state - state)
             t_impact = t + frac * dt
             speed = float(np.linalg.norm(impact[3:6]))
@@ -209,6 +258,7 @@ def integrate_trajectory(v0=827.0, elevation_deg=45.0, azimuth_deg=0.0,
         state = new_state
         t += dt
 
-        # Safety ceiling: a sane shot lands well within this many steps.
+        # Safety ceiling: a sane shot reaches its target altitude well within
+        # this many steps.
         if steps > 10_000_000:
-            raise RuntimeError("trajectory did not return to ground")
+            raise RuntimeError("trajectory did not reach the target altitude")
