@@ -8,6 +8,9 @@ Run:
 Then open: http://localhost:5000
 """
 
+import os
+import tempfile
+
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
 from flask import make_response
@@ -20,7 +23,9 @@ from pinn_corrector import PINNCorrector
 from physics import trajectory as _p2traj
 from physics.trajectory import integrate_trajectory
 from physics.met_message import MetMessage, wind_vector_from_dir_speed
-from physics.engagement import run_engagement
+from physics.engagement import (run_engagement, run_engagement_until_destroyed,
+                                _save_gun_bias, _ensure_phase2_columns)
+from engagement_database import EngagementDatabase
 
 app = Flask(__name__, static_folder=".")
 
@@ -121,11 +126,15 @@ def _met_from_wind(direction_deg, speed_ms):
     return MetMessage.standard_isa(surface_wind=(float(direction_deg), float(speed_ms)))
 
 
-def _trajectory_path(v0, elevation_deg, azimuth_deg, met, dt=0.01, sample_every=40):
+def _trajectory_path(v0, elevation_deg, azimuth_deg, met, dt=0.01, sample_every=40,
+                     target_height_m=0.0):
     """Real flight path as a list of (x, y, z), produced by stepping the FROZEN
     integrator internals (_rk4_step -> _acceleration). The physics lives in the
     frozen module untouched; this only collects intermediate states and detects
-    the ground crossing, mirroring integrate_trajectory's own loop."""
+    the impact crossing, mirroring integrate_trajectory's own loop.
+
+    target_height_m: impact altitude (Component 8). 0.0 (default) reproduces the
+    former z=0 ground-crossing behaviour exactly."""
     theta = np.radians(elevation_deg)
     phi = np.radians(azimuth_deg)
     vx = v0 * np.cos(theta) * np.cos(phi)
@@ -135,20 +144,24 @@ def _trajectory_path(v0, elevation_deg, azimuth_deg, met, dt=0.01, sample_every=
 
     mass, area, Cd = 43.2, 0.018869, _p2traj.CD_PLACEHOLDER
     pts = [[0.0, 0.0, 0.0]]
+    speeds = [float(np.linalg.norm(state[3:6]))]   # real speed (m/s) per point
     step = 0
     while step < 10_000_000:
         new = _p2traj._rk4_step(state, dt, mass, area, Cd, False,
                                 (0.0, 0.0, 0.0), met, True, 1.0)
         step += 1
-        if new[2] < 0.0:  # ground crossing on the way down: interpolate impact
-            frac = state[2] / (state[2] - new[2])
+        # Impact at the target altitude on the descending branch (z = 0 default).
+        if new[2] < target_height_m <= state[2]:
+            frac = (state[2] - target_height_m) / (state[2] - new[2])
             impact = state + frac * (new - state)
-            pts.append([float(impact[0]), float(impact[1]), 0.0])
+            pts.append([float(impact[0]), float(impact[1]), float(target_height_m)])
+            speeds.append(float(np.linalg.norm(impact[3:6])))
             break
         state = new
         if step % sample_every == 0:
             pts.append([float(state[0]), float(state[1]), float(state[2])])
-    return pts
+            speeds.append(float(np.linalg.norm(state[3:6])))
+    return pts, speeds
 
 
 @app.route("/p2")
@@ -172,9 +185,10 @@ def p2_trajectory():
 
     summary = integrate_trajectory(v0=v0, elevation_deg=elevation,
                                    azimuth_deg=azimuth, met=met, use_g7=True)
-    points = _trajectory_path(v0, elevation, azimuth, met)
+    points, speeds = _trajectory_path(v0, elevation, azimuth, met)
     return jsonify({
         "points": points,
+        "speeds": speeds,
         "apex_m": float(summary["apex_m"]),
         "range_m": float(summary["range_m"]),
         "tof_s": float(summary["tof_s"]),
@@ -241,6 +255,135 @@ def p2_engagement():
                      "miss": [float(h["miss"][0]), float(h["miss"][1])]}
                     for h in res["history"]],
     })
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Complete-mission endpoint — one call returns the ENTIRE finished mission so
+# the (future) visualizer holds no truth and computes no physics. It runs the
+# REAL Component 9 loop and, per round, the frozen integrator for the arc. Every
+# numpy value is cast to a plain float before jsonify.
+# ════════════════════════════════════════════════════════════════════════════
+def _rc_axes(bearing_deg):
+    phi = np.radians(bearing_deg)
+    return (np.array([np.cos(phi), np.sin(phi)]),      # downrange unit
+            np.array([-np.sin(phi), np.cos(phi)]))     # cross-range unit
+
+
+def build_mission(d):
+    """Run a full mission and assemble the complete, self-contained package.
+    Pure-Python/float output; safe to jsonify. Factored out of the route so the
+    tests can drive it directly."""
+    weapon_id = str(d.get("weapon_id", "HOW-1"))
+    target_range = float(d.get("target_range", 22000.0))
+    target_bearing = float(d.get("target_bearing", 0.0))
+    target_height_m = float(d.get("target_height_m", 0.0))
+    told_dir = float(d.get("told_wind_dir", 180.0))
+    told_spd = float(d.get("told_wind_speed", 20.0))
+    true_dir = float(d.get("true_wind_dir", 180.0))
+    true_spd = float(d.get("true_wind_speed", 23.0))
+    gun_dr = float(d.get("gun_bias_dr", 200.0))
+    gun_cr = float(d.get("gun_bias_cr", 80.0))
+    lethal_radius_m = float(d.get("lethal_radius_m", 8.0))
+    max_rounds = int(d.get("max_rounds", 15))
+    warm_start = bool(d.get("warm_start", False))
+
+    told_met = _met_from_wind(told_dir, told_spd)
+    true_met = _met_from_wind(true_dir, true_spd)
+    true_conditions = {"true_met": true_met, "gun_bias": (gun_dr, gun_cr)}
+
+    # warm_start: hand the loop a DB that already remembers this gun's bias, so
+    # Component 9 skips registration (a remembered weapon). Temp DB, cleaned up.
+    db = None
+    db_path = None
+    if warm_start:
+        fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        db = EngagementDatabase(db_path)
+        _ensure_phase2_columns(db)
+        _save_gun_bias(db, weapon_id, "155mm-M107", (gun_dr, gun_cr), 1, 0)
+
+    try:
+        res = run_engagement_until_destroyed(
+            weapon_id, target_range, target_bearing, told_met, true_conditions,
+            db=db, lethal_radius_m=lethal_radius_m, max_rounds=max_rounds,
+            target_height_m=target_height_m)
+    finally:
+        if db is not None:
+            db.close()
+            os.remove(db_path)
+
+    elevation = float(res["elevation_deg"])
+
+    # Real shell arc — fired at the firing elevation through the true atmosphere
+    # to the target altitude. Same geometry each round; the per-round impact
+    # below carries the learning. (~70-100 sampled points for smooth drawing.)
+    pts, speeds = _trajectory_path(827.0, elevation, 0.0, true_met,
+                                   sample_every=60, target_height_m=target_height_m)
+    summ = integrate_trajectory(v0=827.0, elevation_deg=elevation, azimuth_deg=0.0,
+                                met=true_met, use_g7=True,
+                                target_height_m=target_height_m)
+    arc = [[float(p[0]), float(p[1]), float(p[2])] for p in pts]
+    apex_m = float(summ["apex_m"])
+    tof_s = float(summ["tof_s"])
+    impact_speed = float(summ["impact_speed"])
+
+    rounds = []
+    for h in res["history"]:
+        miss = h["miss"]
+        rounds.append({
+            "round": int(h["round"]),
+            "phase": h["phase"],
+            "trajectory": arc,
+            "apex_m": apex_m,
+            "tof_s": tof_s,
+            "impact_speed": impact_speed,
+            # where this round landed, downrange/cross (target + miss):
+            "impact": {"x": float(target_range + miss[0]), "y": float(miss[1])},
+            "miss_m": float(h["radial"]),
+            "destroyed_target": bool(h["destroyed_target"]),
+        })
+
+    # True effective wind error rotated into the firing range/cross frame.
+    delta = (wind_vector_from_dir_speed(true_dir, true_spd)
+             - wind_vector_from_dir_speed(told_dir, told_spd))
+    u_dr, u_cr = _rc_axes(target_bearing)
+    atmo_true = [float(np.dot(delta[:2], u_dr)), float(np.dot(delta[:2], u_cr))]
+
+    return {
+        "mission": {
+            "weapon_id": weapon_id,
+            "target_range": target_range,
+            "target_bearing": target_bearing,
+            "target_height_m": target_height_m,
+            "lethal_radius_m": lethal_radius_m,
+            "max_rounds": max_rounds,
+            "destroyed": bool(res["destroyed"]),
+            "destroying_round": (int(res["destroying_round"])
+                                 if res["destroying_round"] is not None else None),
+            "rounds_fired": int(res["rounds_fired"]),
+            "warm_started": bool(res["warm_started"]),
+            "elevation_deg": elevation,
+            "final_miss_m": (float(res["final_miss"])
+                             if res["final_miss"] is not None else None),
+        },
+        "rounds": rounds,
+        "learned": {
+            "gun_bias_est": [float(x) for x in res["gun_bias_est"]],
+            "gun_bias_true": [gun_dr, gun_cr],
+            "atmo_correction_est": [float(x) for x in res["atmo_correction_est"]],
+            "atmo_correction_true": atmo_true,
+        },
+    }
+
+
+@app.route("/api/p2/run_mission", methods=["POST"])
+def p2_run_mission():
+    """One call -> the COMPLETE finished mission (rounds, trajectories, impacts,
+    learning, stop). The browser animates this; it computes no physics."""
+    try:
+        return jsonify(build_mission(request.get_json(force=True)))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 if __name__ == "__main__":
