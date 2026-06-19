@@ -306,3 +306,177 @@ def run_engagement(weapon_id, target_range, target_bearing,
         result["engagement_id"] = eid
 
     return result
+
+
+# ===========================================================================
+# Component 9 — fire until destroyed, then stop (adaptable lethal radius).
+# A NEW function; run_engagement above is untouched. It reuses the same proven
+# estimators and frozen integrator as tools.
+# ===========================================================================
+def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
+                                   met_message, true_conditions, db=None,
+                                   lethal_radius_m=8.0, max_rounds=15,
+                                   min_learning_rounds=2,
+                                   weapon_type="155mm-M107",
+                                   target_height_m=0.0):
+    """
+    Fires, learns from each miss, and STOPS the instant a round lands within
+    lethal_radius_m of the target (target destroyed) — or when max_rounds is
+    reached (safety cap). Returns the shot-by-shot trace, whether the target
+    was destroyed, the round number that destroyed it, and the final miss.
+
+    lethal_radius_m: distance within which a round destroys the target.
+      Adaptable — any positive value; default 8.0 (155mm standard). A precision
+      use case might set 2 m, an area weapon 30 m; the model fits the case.
+    max_rounds: safety cap so the mission can't fire forever.
+    min_learning_rounds: fire at least this many ranging/adjustment rounds
+      before it's allowed to declare a hit (the first cold shot at long range
+      rarely lands within lethal radius; the system needs a couple of
+      observations to learn the gun bias and atmospheric error).
+    target_height_m: passed through to the integrator (Component 8).
+
+    Doctrine: a remembered weapon (gun bias in the DB) skips registration and
+    fires for effect immediately; an unknown weapon fires a brief registration
+    (known-good MET) to learn — and persist — its mechanical bias first. Either
+    way the operation rounds aim at the target under the imperfect told MET, the
+    atmospheric Kalman learns the residual from each miss, and the mission ends
+    the instant a round falls within the lethal radius.
+    """
+    if lethal_radius_m <= 0.0:
+        raise ValueError("lethal_radius_m must be positive")
+
+    true_met = true_conditions["true_met"]
+    true_gun = np.asarray(true_conditions["gun_bias"], dtype=float)
+    told_met = met_message
+
+    # Height-aware impact in the range/cross frame (None if unreachable).
+    def imp(met, elev):
+        r = integrate_trajectory(v0=V0, elevation_deg=elev,
+                                 azimuth_deg=target_bearing, met=met,
+                                 use_g7=True, target_height_m=target_height_m)
+        if r.get("reached") is False:
+            return None
+        return _world_to_rc(np.array([r["impact_x"], r["impact_y"]]), target_bearing)
+
+    # Fire-control elevation (height-aware) putting the told-MET impact on target.
+    def solve_elev(lo=15.0, hi=48.0):
+        def dr(e):
+            p = imp(told_met, e)
+            return -1e9 if p is None else p[0] - target_range
+        if dr(lo) > 0:
+            return lo
+        if dr(hi) < 0:
+            return hi
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            fm = dr(mid)
+            if abs(fm) < 1e-3:
+                return mid
+            if fm > 0:
+                hi = mid
+            else:
+                lo = mid
+        return 0.5 * (lo + hi)
+
+    elevation = solve_elev()
+
+    # Wind sensitivity H (metres per m/s) at the told MET, height-aware.
+    base = imp(told_met, elevation)
+    h_dr = imp(_met_plus_uniform_wind(told_met, _rc_to_world([1.0, 0.0], target_bearing)),
+               elevation) - base
+    h_cr = imp(_met_plus_uniform_wind(told_met, _rc_to_world([0.0, 1.0], target_bearing)),
+               elevation) - base
+    H = np.column_stack([h_dr, h_cr])
+
+    # Warm-start the gun bias (Estimator A) from the DB if the weapon is known.
+    warm = None
+    if db is not None:
+        _ensure_phase2_columns(db)
+        warm = _load_gun_bias(db, weapon_id)
+    warm_started = warm is not None
+    estA = GunBiasEstimator(init=tuple(warm) if warm_started else (0.0, 0.0),
+                            init_P=(100.0 if warm_started else 1.0e4), R=400.0)
+    estB = AtmosphericStateEstimator([0.0, 0.0], np.diag([25.0, 25.0]),
+                                     np.diag([0.05, 0.05]), np.diag([2500.0, 2500.0]))
+
+    obs_true = imp(true_met, elevation)        # constant realized impact (hidden)
+    if obs_true is None:
+        raise ValueError("target altitude unreachable under true conditions")
+
+    history = []
+    round_no = 0
+    destroyed = False
+    destroying_round = None
+    final_miss = None
+
+    def log(phase, miss, destroy):
+        nonlocal round_no
+        round_no += 1
+        history.append({"round": round_no, "phase": phase,
+                        "miss": [float(miss[0]), float(miss[1])],
+                        "radial": float(np.hypot(*miss)),
+                        "destroyed_target": bool(destroy)})
+        return round_no
+
+    # --- COLD start only: brief registration to learn + persist the gun bias.
+    # Known-good MET isolates the gun, so the miss is purely the residual gun
+    # error. (Calibration under an idealised MET, so these rounds do not declare
+    # a kill; the real assessment is the operation rounds below.)
+    if not warm_started:
+        for _ in range(max(2, min_learning_rounds)):
+            if round_no >= max_rounds:
+                break
+            miss = true_gun - estA.state()
+            log("REGISTRATION", miss, False)
+            estA.update(miss + estA.state())
+            if float(np.hypot(*miss)) < 10.0:
+                break
+
+    # --- OPERATION: fire at the target under the imperfect told MET, assess,
+    # learn the atmospheric residual, and STOP the instant a round is lethal.
+    while round_no < max_rounds and not destroyed:
+        corrected_met = _met_plus_uniform_wind(
+            told_met, _rc_to_world(estB.state(), target_bearing))
+        pred = imp(corrected_met, elevation)
+        # Accuracy miss vs the target (the aim correction cancels out): as the
+        # estimators converge this collapses toward zero.
+        miss = (obs_true + true_gun) - (pred + estA.state())
+        radial = float(np.hypot(*miss))
+
+        this_round = round_no + 1
+        if this_round >= min_learning_rounds and radial <= lethal_radius_m:
+            log("FIRE_FOR_EFFECT", miss, True)        # target destroyed -> stop
+            destroyed = True
+            destroying_round = this_round
+            final_miss = radial
+            break
+
+        log("ADJUSTMENT", miss, False)
+        estB.predict()
+        estB.update(miss, H)
+
+    if final_miss is None and history:
+        final_miss = history[-1]["radial"]
+
+    # Persist the learned gun bias so the next mission on this weapon warm-starts.
+    if db is not None:
+        prof = db.get_weapon_profile(weapon_id)
+        n_eng = (prof["n_engagements"] if prof else 0) + 1
+        total = (prof["total_rounds_fired"] if prof else 0) + round_no
+        _save_gun_bias(db, weapon_id, weapon_type, estA.state(), n_eng, total)
+
+    return {
+        "weapon_id": weapon_id,
+        "destroyed": destroyed,
+        "rounds_fired": round_no,
+        "destroying_round": destroying_round,
+        "final_miss": final_miss,
+        "lethal_radius_m": float(lethal_radius_m),
+        "max_rounds": max_rounds,
+        "min_learning_rounds": min_learning_rounds,
+        "warm_started": warm_started,
+        "gun_bias_est": estA.state(),
+        "atmo_correction_est": estB.state(),
+        "elevation_deg": elevation,
+        "history": history,
+    }
