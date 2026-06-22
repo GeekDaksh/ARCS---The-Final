@@ -56,8 +56,12 @@ def test_layer1_crosswind_minus_y_deflects_minus_y():
 
 
 def test_layer1_crosswind_symmetric():
-    plus = shot(wind=(0.0, 20.0, 0.0))["impact_y"]
-    minus = shot(wind=(0.0, -20.0, 0.0))["impact_y"]
+    # Pure-wind symmetry: disable spin drift (Component 10) so the wind effect is
+    # isolated. Spin drift adds a consistent same-sign lateral offset to both
+    # shots (it does not flip with wind), which is correct physics but masks the
+    # wind's own +/- symmetry; with it off the deflections are exactly opposite.
+    plus = shot(wind=(0.0, 20.0, 0.0), spin_drift=False, coriolis=False)["impact_y"]
+    minus = shot(wind=(0.0, -20.0, 0.0), spin_drift=False, coriolis=False)["impact_y"]
     assert abs(plus + minus) <= 1e-6 * abs(plus)  # equal and opposite
 
 
@@ -113,8 +117,11 @@ def test_layer3_range_monotonic_decreasing_in_headwind():
 
 
 def test_layer3_deflection_monotonic_roughly_linear():
+    # Pure-wind linearity: isolate from the constant spin-drift / Coriolis
+    # offsets (Components 10/11), which would skew the per-(m/s) ratios.
     speeds = [5.0, 10.0, 15.0, 20.0]
-    defl = [shot(wind=(0.0, w, 0.0))["impact_y"] for w in speeds]
+    defl = [shot(wind=(0.0, w, 0.0), spin_drift=False, coriolis=False)["impact_y"]
+            for w in speeds]
     # Monotonic increasing.
     assert all(defl[i] < defl[i + 1] for i in range(len(defl) - 1)), defl
     # Roughly linear: deflection-per-(m/s) ratios should be within ~25%.

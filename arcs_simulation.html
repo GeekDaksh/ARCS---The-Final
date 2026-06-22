@@ -402,6 +402,7 @@ input.env-sl::-moz-range-thumb{width:10px;height:10px;border-radius:50%;backgrou
     <div class="stat-row"><span class="stat-k">Elapsed</span> <span class="stat-v fr" id="tele-ela">—</span></div>
     <div class="stat-row"><span class="stat-k">Altitude</span><span class="stat-v fr" id="tele-alt">—</span></div>
     <div class="stat-row"><span class="stat-k">Velocity</span><span class="stat-v fr" id="tele-vel">—</span></div>
+    <div class="stat-row"><span class="stat-k">Trajectory</span><span class="stat-v fr" id="tele-src">—</span></div>
   </div>
 </div>
 
@@ -734,6 +735,41 @@ function makeTraj(pitchRad, bearingRad, v0, steps=200) {
     pts.push(new THREE.Vector3(vx*t, Math.max(.08,y), vz*t));
   }
   return pts;
+}
+
+// ── Real Phase 2 trajectory from the backend (browser draws, Python computes) ──
+// Fetches the validated drag-affected arc from /api/p2/trajectory and maps the
+// physics-frame points (downrange, cross, altitude in metres) into the SAME
+// scene convention makeTraj() uses. The shot is requested at azimuth 0 (own
+// downrange/cross frame) and rotated into the scene by the firing bearing here.
+let usingApproxTraj = false;
+async function makeTrajReal(pitchDeg, bearingDeg, v0) {
+  try {
+    const r = await fetch('/api/p2/trajectory', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ v0:v0, elevation:pitchDeg, azimuth:0 })  // standard ISA, no wind
+    });
+    if(!r.ok) return null;
+    const j = await r.json();
+    if(!j || !Array.isArray(j.points) || j.points.length < 2) return null;
+    const br=bearingDeg*Math.PI/180, cb=Math.cos(br), sb=Math.sin(br);
+    const pts = j.points.map(p => {
+      const dr=p[0], cross=p[1], alt=p[2];
+      const sceneX = dr*sb + cross*cb;
+      const sceneY = Math.max(.08, alt);
+      const sceneZ = dr*cb - cross*sb;
+      return new THREE.Vector3(sceneX, sceneY, sceneZ);
+    });
+    const speeds = (Array.isArray(j.speeds) && j.speeds.length===j.points.length)
+                   ? j.speeds.slice() : null;
+    return { pts, speeds };
+  } catch(e) { return null; }
+}
+
+function setTrajSrcIndicator() {
+  const el = document.getElementById('tele-src'); if(!el) return;
+  if(usingApproxTraj) { el.textContent = 'APPROX ⚠'; el.style.color = 'var(--warn)'; }
+  else                { el.textContent = 'REAL ✓';   el.style.color = 'var(--hit)'; }
 }
 
 function impactPoint(pitchRad, bearingRad, v0, ty) {
@@ -1103,7 +1139,7 @@ function cycleCam() {
 }
 
 // ═══ FIRE ONE SHOT (per-shot learning loop) ════════════════════════
-function fireShot() {
+async function fireShot() {
   if(!target||!sol||state==='firing') return;
   if(shotHistory.length >= TOTAL_SHOTS) return;
 
@@ -1115,9 +1151,16 @@ function fireShot() {
   document.body.classList.add('inflight');
   setBadge('aim');
 
-  // Animation trajectory — use corrected + bias (deterministic, for visual)
+  // Animation trajectory — use corrected + bias (deterministic, for visual).
+  // Source the points from the REAL validated Phase 2 physics; fall back to the
+  // JS vacuum approximation (with a visible indicator) only if the backend
+  // call fails, never silently showing approximate physics as if it were real.
   const b = applyBias(sol.pD+correction.dp, sol.bD+correction.db, V0+correction.dv);
-  trajCorr = makeTraj(b.pitch*Math.PI/180, b.bearing*Math.PI/180, b.v0);
+  let realSpeeds = null;
+  const real = await makeTrajReal(b.pitch, b.bearing, b.v0);
+  if(real) { trajCorr = real.pts; realSpeeds = real.speeds; usingApproxTraj = false; }
+  else     { trajCorr = makeTraj(b.pitch*Math.PI/180, b.bearing*Math.PI/180, b.v0); usingApproxTraj = true; }
+  setTrajSrcIndicator();
 
   // Also show a baseline arc for the first 3 shots
   if(n === 0) {
@@ -1163,7 +1206,10 @@ function fireShot() {
         if(pos.y > peakY) { peakY = pos.y; showApex(pos); }
         document.getElementById('tele-ela').textContent = (sol.tof*t).toFixed(2)+' s';
         document.getElementById('tele-alt').textContent = pos.y.toFixed(1)+' m';
-        document.getElementById('tele-vel').textContent = Math.sqrt(V0*V0 - 2*G*Math.max(0,pos.y)).toFixed(0)+' m/s';
+        const vel = (realSpeeds && realSpeeds[projIdx]!=null)
+                    ? realSpeeds[projIdx]
+                    : Math.sqrt(Math.max(0, V0*V0 - 2*G*Math.max(0,pos.y)));
+        document.getElementById('tele-vel').textContent = vel.toFixed(0)+' m/s';
         if(t < 1) { animId = requestAnimationFrame(step); return; }
 
         // Landing

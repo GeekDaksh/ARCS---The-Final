@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ARCS Phase 2 — Engagement Analysis</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
   :root{
     --navy:#0a0e1a; --panel:#0e1626; --panel2:#0b1220; --line:#1c2a44;
@@ -13,11 +14,11 @@
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--navy);color:var(--ink);
-    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5}
   h1,h2,h3{margin:0;font-weight:600;letter-spacing:.04em}
-  .wrap{max-width:1320px;margin:0 auto;padding:18px}
+  .wrap{max-width:1340px;margin:0 auto;padding:26px 24px 40px}
   header{display:flex;align-items:center;justify-content:space-between;
-    border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:14px}
+    border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:20px}
   header h1{font-size:18px;color:#eaf4ff}
   header h1 small{color:var(--cyan);font-weight:400}
   .state{display:flex;align-items:center;gap:14px}
@@ -33,26 +34,46 @@
   .offline.show{display:block}
 
   /* controls */
-  .controls{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;
-    background:var(--panel);border:1px solid var(--line);border-radius:10px;
-    padding:14px;margin-bottom:14px}
-  .ctl{display:flex;flex-direction:column;gap:5px}
-  .ctl label{color:var(--muted);font-size:11px;letter-spacing:.05em}
+  .controls{display:grid;grid-template-columns:repeat(6,1fr);gap:16px;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:20px;margin-bottom:18px}
+  .ctl{display:flex;flex-direction:column;gap:6px}
+  .ctl label{color:var(--muted);font-size:11px;letter-spacing:.05em;display:flex;align-items:center}
   .ctl input{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
-    border-radius:6px;padding:7px 8px;font-family:inherit;font-size:13px}
+    border-radius:6px;padding:8px 9px;font-family:inherit;font-size:13px}
   .ctl input:focus{outline:none;border-color:var(--cyan)}
   .runbar{grid-column:1/-1;display:flex;align-items:center;gap:14px;
-    border-top:1px solid var(--line);padding-top:12px;margin-top:2px}
+    border-top:1px solid var(--line);padding-top:16px;margin-top:4px}
   button.run{background:linear-gradient(180deg,#0596b8,#046c86);color:#eaffff;
     border:1px solid var(--cyan);border-radius:8px;padding:10px 22px;
     font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:.05em}
   button.run:hover{background:linear-gradient(180deg,#07b6dd,#0596b8)}
   button.run:disabled{opacity:.5;cursor:default}
+  button.run.alt{background:linear-gradient(180deg,#13314a,#0d2236);color:#bfe7ff;border-color:var(--line)}
+  button.run.alt:hover{background:linear-gradient(180deg,#1a4262,#13314a);border-color:var(--cyan)}
   .hint{color:var(--muted);font-size:11px}
 
+  /* info (i) tooltip */
+  .info{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+    border-radius:50%;border:1px solid var(--muted);color:var(--muted);font-size:9px;font-style:italic;
+    font-weight:700;cursor:help;position:relative;margin-left:6px;flex:none;line-height:1}
+  .info:hover{border-color:var(--cyan);color:var(--cyan)}
+  .info:hover::after{content:attr(data-tip);position:absolute;left:50%;top:150%;transform:translateX(-50%);
+    width:230px;max-width:46vw;background:#0c1626;border:1px solid var(--line);color:var(--ink);
+    padding:9px 11px;border-radius:8px;font-size:11px;font-style:normal;font-weight:400;line-height:1.45;
+    letter-spacing:0;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.55);white-space:normal;pointer-events:none}
+  .info:hover::before{content:'';position:absolute;left:50%;top:138%;transform:translateX(-50%);
+    border:5px solid transparent;border-bottom-color:var(--line);z-index:61;pointer-events:none}
+
+  /* mini reset button on plotted panels */
+  .mini{background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:6px;
+    padding:4px 9px;font-family:inherit;font-size:10px;cursor:pointer;letter-spacing:.04em;margin-left:10px}
+  .mini:hover{border-color:var(--cyan);color:var(--cyan)}
+  .tools{display:flex;align-items:center}
+
   /* headline */
-  .headline{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:14px;margin-bottom:14px}
-  .hcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .headline{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:18px;margin-bottom:18px}
+  .hcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
   .hcard .k{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
   .hcard .v{font-size:38px;font-weight:700;line-height:1.1;margin-top:6px}
   .hcard .v small{font-size:15px;color:var(--muted);font-weight:400}
@@ -60,13 +81,16 @@
   .hcard .sub{color:var(--muted);font-size:11px;margin-top:6px}
 
   /* grid of 4 views */
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
   .panel h3{font-size:12px;color:#bfe7ff;letter-spacing:.08em;text-transform:uppercase;
-    margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+    margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .panel h3 .htitle{display:flex;align-items:center}
   .panel h3 .legend{font-size:10px;color:var(--muted);font-weight:400;letter-spacing:.02em}
   .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin:0 4px 0 10px;vertical-align:middle}
-  svg{width:100%;display:block}
+  svg{width:100%;display:block;touch-action:none;border-radius:8px}
+  .plot{cursor:grab}
+  .plot:active{cursor:grabbing}
   .lvt{width:100%;border-collapse:collapse;font-size:13px}
   .lvt th{color:var(--muted);font-weight:500;text-align:right;padding:7px 8px;
     border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.04em}
@@ -105,16 +129,17 @@
 
   <!-- CONTROLS -->
   <div class="controls">
-    <div class="ctl"><label>Target range (m)</label><input id="target_range" type="number" value="22000" step="500"></div>
-    <div class="ctl"><label>Target bearing (°)</label><input id="target_bearing" type="number" value="0" step="5"></div>
-    <div class="ctl"><label>Told wind dir (°)</label><input id="told_wind_dir" type="number" value="180" step="5"></div>
-    <div class="ctl"><label>Told wind speed (m/s)</label><input id="told_wind_speed" type="number" value="20" step="1"></div>
-    <div class="ctl"><label>True wind dir (°)</label><input id="true_wind_dir" type="number" value="180" step="5"></div>
-    <div class="ctl"><label>True wind speed (m/s)</label><input id="true_wind_speed" type="number" value="23" step="1"></div>
-    <div class="ctl"><label>Gun bias — downrange (m)</label><input id="gun_bias_dr" type="number" value="200" step="10"></div>
-    <div class="ctl"><label>Gun bias — cross (m)</label><input id="gun_bias_cr" type="number" value="80" step="10"></div>
+    <div class="ctl"><label>Target range (m)<span class="info" data-tip="Distance to the target. The fire-control computer solves the firing elevation needed to reach it.">i</span></label><input id="target_range" type="number" value="22000" step="500"></div>
+    <div class="ctl"><label>Target bearing (°)<span class="info" data-tip="Compass direction to the target, measured clockwise from the downrange axis.">i</span></label><input id="target_bearing" type="number" value="0" step="5"></div>
+    <div class="ctl"><label>Told wind dir (°)<span class="info" data-tip="Wind direction the fire-control computer is TOLD (degrees the wind blows FROM). May be wrong.">i</span></label><input id="told_wind_dir" type="number" value="180" step="5"></div>
+    <div class="ctl"><label>Told wind speed (m/s)<span class="info" data-tip="The wind speed the fire-control computer is told — which may be wrong.">i</span></label><input id="told_wind_speed" type="number" value="20" step="1"></div>
+    <div class="ctl"><label>True wind dir (°)<span class="info" data-tip="The REAL wind direction, hidden from the system. The gap vs the told wind is what it must learn.">i</span></label><input id="true_wind_dir" type="number" value="180" step="5"></div>
+    <div class="ctl"><label>True wind speed (m/s)<span class="info" data-tip="The REAL wind speed, hidden from the system. Only the misses reveal it.">i</span></label><input id="true_wind_speed" type="number" value="23" step="1"></div>
+    <div class="ctl"><label>Gun bias — downrange (m)<span class="info" data-tip="Hidden mechanical bias: how far long (+) or short (−) this gun always shoots, in metres.">i</span></label><input id="gun_bias_dr" type="number" value="200" step="10"></div>
+    <div class="ctl"><label>Gun bias — cross (m)<span class="info" data-tip="Hidden mechanical bias: how far right (+) or left (−) this gun always shoots, in metres.">i</span></label><input id="gun_bias_cr" type="number" value="80" step="10"></div>
     <div class="runbar">
       <button class="run" id="runBtn">▶ RUN ENGAGEMENT</button>
+      <button class="run alt" id="rndBtn">🎲 RANDOMIZE</button>
       <span class="hint" id="runHint">Tell the computer a wrong wind &amp; give the gun a hidden bias — watch it learn both from misses.</span>
     </div>
   </div>
@@ -142,25 +167,25 @@
   <div class="grid">
     <!-- 1. trajectory arc -->
     <div class="panel">
-      <h3>Trajectory · side-on (downrange × altitude)
-        <span class="legend">shaded = MET atmosphere zones</span></h3>
-      <svg id="arc" viewBox="0 0 600 300" preserveAspectRatio="xMidYMid meet"></svg>
+      <h3><span class="htitle">Trajectory · side-on (downrange × altitude)<span class="info" data-tip="Real shell arc from the frozen integrator, side-on. Shaded bands are the standard MET atmosphere zones. Scroll to zoom, drag to pan.">i</span></span>
+        <span class="tools"><span class="legend">shaded = MET zones</span><button class="mini" data-reset="arc">⟲ reset</button></span></h3>
+      <svg class="plot" id="arc" viewBox="0 0 600 300" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
     <!-- 2. beaten zone -->
     <div class="panel">
-      <h3>Beaten zone · top-down (downrange × cross)
-        <span class="legend"><i style="background:var(--orange)"></i>reg<i style="background:var(--cyan)"></i>adj<i style="background:var(--green)"></i>ffe</span></h3>
-      <svg id="beaten" viewBox="0 0 600 300" preserveAspectRatio="xMidYMid meet"></svg>
+      <h3><span class="htitle">Beaten zone · top-down (downrange × cross)<span class="info" data-tip="Top-down view of where each shot landed relative to the target. Scroll to zoom right in on the tight post-convergence cluster; drag to pan.">i</span></span>
+        <span class="tools"><span class="legend"><i style="background:var(--orange)"></i>reg<i style="background:var(--cyan)"></i>adj<i style="background:var(--green)"></i>ffe</span><button class="mini" data-reset="beaten">⟲ reset</button></span></h3>
+      <svg class="plot" id="beaten" viewBox="0 0 600 300" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
     <!-- 3. convergence -->
     <div class="panel">
-      <h3>Convergence · miss per round
-        <span class="legend">headline analysis</span></h3>
+      <h3><span class="htitle">Convergence · miss per round<span class="info" data-tip="Miss distance per round on a log scale. Watch it collapse to the final CEP across the three phases. Scroll to zoom, drag to pan.">i</span></span>
+        <span class="tools"><span class="legend">headline analysis</span><button class="mini" data-reset="conv">⟲ reset</button></span></h3>
       <canvas id="convChart" height="220"></canvas>
     </div>
     <!-- 4. learned vs true -->
     <div class="panel">
-      <h3>Learned vs hidden truth
+      <h3><span class="htitle">Learned vs hidden truth<span class="info" data-tip="What the two estimators recovered from the misses alone, beside the hidden truths they were never told.">i</span></span>
         <span class="legend">it was told NONE of this</span></h3>
       <table class="lvt">
         <thead><tr><th>Quantity</th><th>Estimated</th><th>Hidden truth</th><th>Δ</th></tr></thead>
@@ -186,6 +211,60 @@ const MET_ZONES = [0,200,500,1000,1500,2000,3000,4000,5000,6000,8000,10000,12000
 let convChart = null;
 
 const $ = id => document.getElementById(id);
+
+/* ===== SVG zoom / pan ====================================================
+   Standard interaction: wheel/trackpad = zoom centred on the cursor,
+   click-drag = pan, double-click or the ⟲ button = reset. Content is wrapped
+   in a <g class="vp"> whose transform we update; markers/labels carry class
+   "fs" and are counter-scaled (size = base / k) so they stay a constant size
+   while the geometry zooms — letting you zoom in tight on individual shots. */
+const MAXK = {arc:16, beaten:80};
+const svgState = {arc:{k:1,tx:0,ty:0}, beaten:{k:1,tx:0,ty:0}};
+
+function vpWrap(id, inner){
+  const s = svgState[id];
+  return `<g class="vp" transform="translate(${s.tx} ${s.ty}) scale(${s.k})">${inner}</g>`;
+}
+function applyVp(id){
+  const g = $(id).querySelector('.vp'); if(!g) return;
+  const s = svgState[id];
+  g.setAttribute('transform', `translate(${s.tx} ${s.ty}) scale(${s.k})`);
+  g.querySelectorAll('.fs').forEach(el=>{
+    if(el.tagName === 'text') el.setAttribute('font-size', (+el.dataset.fs)/s.k);
+    else if(el.tagName === 'circle') el.setAttribute('r', (+el.dataset.r)/s.k);
+  });
+}
+function svgPoint(id, clientX, clientY){
+  const svg = $(id), r = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal;
+  return {x:(clientX-r.left)/r.width*vb.width, y:(clientY-r.top)/r.height*vb.height};
+}
+function resetSvg(id){ svgState[id] = {k:1,tx:0,ty:0}; applyVp(id); }
+
+function setupSvgZoom(id){
+  const svg = $(id);
+  svg.addEventListener('wheel', ev=>{
+    ev.preventDefault();
+    const s = svgState[id], p = svgPoint(id, ev.clientX, ev.clientY);
+    const nk = Math.min(MAXK[id], Math.max(0.6, s.k*Math.exp(-ev.deltaY*0.0016)));
+    const cx = (p.x-s.tx)/s.k, cy = (p.y-s.ty)/s.k;      // keep cursor point fixed
+    s.tx = p.x - cx*nk; s.ty = p.y - cy*nk; s.k = nk;
+    applyVp(id);
+  }, {passive:false});
+  let drag = null;
+  svg.addEventListener('mousedown', ev=>{
+    drag = {x:ev.clientX, y:ev.clientY, tx:svgState[id].tx, ty:svgState[id].ty};
+    ev.preventDefault();
+  });
+  window.addEventListener('mousemove', ev=>{
+    if(!drag) return;
+    const r = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal;
+    svgState[id].tx = drag.tx + (ev.clientX-drag.x)/r.width*vb.width;
+    svgState[id].ty = drag.ty + (ev.clientY-drag.y)/r.height*vb.height;
+    applyVp(id);
+  });
+  window.addEventListener('mouseup', ()=>{ drag = null; });
+  svg.addEventListener('dblclick', ev=>{ ev.preventDefault(); resetSvg(id); });
+}
 function setOffline(off){
   $('offline').classList.toggle('show', off);
   $('beDot').className = 'dot ' + (off ? 'off' : 'ok');
@@ -247,12 +326,14 @@ function renderHeadline(e){
 
 /* ---- 1. Trajectory arc with atmospheric bands ---- */
 function drawArc(t, e){
-  const W=600,H=300, mL=46,mR=14,mT=12,mB=26;
+  svgState.arc = {k:1,tx:0,ty:0};   // frame the fresh result
+  const W=600,H=300, mL=52,mR=20,mT=16,mB=34;
   const pw=W-mL-mR, ph=H-mT-mB;
-  const xmax = Math.max(t.range_m, e.target_range)*1.04;
-  const zmax = Math.max(t.apex_m*1.28, 1000);
+  const xmax = Math.max(t.range_m, e.target_range)*1.05;
+  const zmax = Math.max(t.apex_m*1.30, 1000);
   const X = x => mL + (x/xmax)*pw;
   const Y = z => mT + ph - (z/zmax)*ph;
+  const ns = 'vector-effect="non-scaling-stroke"';
   let s = '';
   // atmospheric zone bands
   const zones = MET_ZONES.filter(z=>z<=zmax);
@@ -262,53 +343,61 @@ function drawArc(t, e){
     const yTop=Y(Math.min(z1,zmax)), yBot=Y(z0);
     const shade = i%2===0 ? 'rgba(0,229,255,0.05)' : 'rgba(0,229,255,0.025)';
     s += `<rect x="${mL}" y="${yTop}" width="${pw}" height="${yBot-yTop}" fill="${shade}"/>`;
-    s += `<line class="gridline" x1="${mL}" y1="${yBot}" x2="${mL+pw}" y2="${yBot}"/>`;
-    if(z0>0) s += `<text class="axislbl" x="${mL-6}" y="${yBot+3}" text-anchor="end">${z0>=1000?(z0/1000)+'k':z0}</text>`;
+    s += `<line class="gridline" ${ns} x1="${mL}" y1="${yBot}" x2="${mL+pw}" y2="${yBot}"/>`;
+    if(z0>0) s += `<text class="axislbl fs" data-fs="10" x="${mL-7}" y="${yBot+3}" text-anchor="end">${z0>=1000?(z0/1000)+'k':z0}</text>`;
   }
-  s += `<text class="axislbl" x="${mL-6}" y="${Y(0)+3}" text-anchor="end">0</text>`;
+  s += `<text class="axislbl fs" data-fs="10" x="${mL-7}" y="${Y(0)+3}" text-anchor="end">0</text>`;
   // arc polyline (downrange vs altitude)
   const pts = t.points.map(p=>`${X(p[0])},${Y(p[2])}`).join(' ');
-  s += `<polyline points="${pts}" fill="none" stroke="#36f08a" stroke-width="2.2"/>`;
-  // gun, apex, target
-  s += `<circle cx="${X(0)}" cy="${Y(0)}" r="4" fill="#00e5ff"/>`;
-  s += `<text class="axislbl" x="${X(0)+6}" y="${Y(0)-6}" fill="#00e5ff">gun</text>`;
+  s += `<polyline points="${pts}" fill="none" stroke="#36f08a" stroke-width="2.2" ${ns}/>`;
+  // gun, apex, target — labels kept off the axis ticks to avoid overlap
+  s += `<circle class="fs" data-r="4" cx="${X(0)}" cy="${Y(0)}" r="4" fill="#00e5ff"/>`;
+  s += `<text class="axislbl fs" data-fs="10" x="${X(0)+7}" y="${Y(0)-7}" fill="#00e5ff">gun</text>`;
   const apex = t.points.reduce((a,p)=>p[2]>a[2]?p:a,[0,0,0]);
-  s += `<circle cx="${X(apex[0])}" cy="${Y(apex[2])}" r="3" fill="#ff9f1c"/>`;
-  s += `<text class="axislbl" x="${X(apex[0])}" y="${Y(apex[2])-7}" text-anchor="middle" fill="#ff9f1c">apex ${Math.round(t.apex_m)} m</text>`;
-  s += `<circle cx="${X(e.target_range)}" cy="${Y(0)}" r="4" fill="none" stroke="#ff4d5e" stroke-width="2"/>`;
-  s += `<text class="axislbl" x="${X(e.target_range)}" y="${Y(0)+16}" text-anchor="middle" fill="#ff4d5e">target</text>`;
-  // x axis ticks
-  for(let k=0;k<=4;k++){ const xv=xmax*k/4; s+=`<text class="axislbl" x="${X(xv)}" y="${H-8}" text-anchor="middle">${(xv/1000).toFixed(0)} km</text>`; }
-  s += `<text class="axislbl" x="${mL-38}" y="${mT+8}" transform="rotate(0)">alt m</text>`;
-  $('arc').innerHTML = s;
+  s += `<circle class="fs" data-r="3" cx="${X(apex[0])}" cy="${Y(apex[2])}" r="3" fill="#ff9f1c"/>`;
+  s += `<text class="axislbl fs" data-fs="10" x="${X(apex[0])}" y="${Y(apex[2])-8}" text-anchor="middle" fill="#ff9f1c">apex ${Math.round(t.apex_m)} m</text>`;
+  s += `<circle class="fs" data-r="4" cx="${X(e.target_range)}" cy="${Y(0)}" r="4" fill="none" stroke="#ff4d5e" stroke-width="2" ${ns}/>`;
+  s += `<text class="axislbl fs" data-fs="10" x="${X(e.target_range)-6}" y="${Y(0)-9}" text-anchor="end" fill="#ff4d5e">target</text>`;
+  // x axis ticks (below the baseline, clear of the target label above it)
+  for(let k=0;k<=4;k++){ const xv=xmax*k/4; s+=`<text class="axislbl fs" data-fs="10" x="${X(xv)}" y="${Y(0)+18}" text-anchor="middle">${(xv/1000).toFixed(0)}</text>`; }
+  s += `<text class="axislbl fs" data-fs="10" x="${mL+pw/2}" y="${H-6}" text-anchor="middle">downrange (km)</text>`;
+  s += `<text class="axislbl fs" data-fs="10" x="${mL-44}" y="${mT+6}">alt (m)</text>`;
+  $('arc').innerHTML = vpWrap('arc', s);
+  applyVp('arc');
 }
 
 /* ---- 2. Beaten-zone top-down ---- */
 function drawBeaten(e){
+  svgState.beaten = {k:1,tx:0,ty:0};   // frame the fresh result
   const W=600,H=300, cx=W/2, cy=H/2;
   const pts = e.history.map(h=>h.miss);
   let m = 30;
   pts.forEach(p=>{ m=Math.max(m, Math.abs(p[0]), Math.abs(p[1])); });
   m *= 1.25;
-  const sc = (Math.min(W,H)/2 - 24)/m;
+  const sc = (Math.min(W,H)/2 - 26)/m;
+  const ns = 'vector-effect="non-scaling-stroke"';
   let s='';
-  // range rings
-  [0.33,0.66,1.0].forEach(f=>{ s+=`<circle cx="${cx}" cy="${cy}" r="${f*m*sc}" fill="none" stroke="#142036"/>`;
-    s+=`<text class="axislbl" x="${cx+f*m*sc-2}" y="${cy-4}" text-anchor="end">${Math.round(f*m)}m</text>`; });
+  // range rings + labels placed up-left at 45° so they never sit on the axes
+  [0.33,0.66,1.0].forEach(f=>{
+    const rr=f*m*sc;
+    s+=`<circle cx="${cx}" cy="${cy}" r="${rr}" fill="none" stroke="#142036" ${ns}/>`;
+    s+=`<text class="axislbl fs" data-fs="10" x="${cx-rr*0.707+2}" y="${cy-rr*0.707-3}" text-anchor="start">${Math.round(f*m)}m</text>`;
+  });
   // crosshair / target
-  s+=`<line class="gridline" x1="${cx-m*sc}" y1="${cy}" x2="${cx+m*sc}" y2="${cy}"/>`;
-  s+=`<line class="gridline" x1="${cx}" y1="${cy-m*sc}" x2="${cx}" y2="${cy+m*sc}"/>`;
-  s+=`<circle cx="${cx}" cy="${cy}" r="5" fill="none" stroke="#ff4d5e" stroke-width="2"/>`;
-  s+=`<text class="axislbl" x="${cx+8}" y="${cy+14}" fill="#ff4d5e">target</text>`;
-  s+=`<text class="axislbl" x="${cx}" y="18" text-anchor="middle">+ downrange →</text>`;
-  s+=`<text class="axislbl" x="14" y="${cy-6}">← cross →</text>`;
+  s+=`<line class="gridline" ${ns} x1="${cx-m*sc}" y1="${cy}" x2="${cx+m*sc}" y2="${cy}"/>`;
+  s+=`<line class="gridline" ${ns} x1="${cx}" y1="${cy-m*sc}" x2="${cx}" y2="${cy+m*sc}"/>`;
+  s+=`<circle class="fs" data-r="5" cx="${cx}" cy="${cy}" r="5" fill="none" stroke="#ff4d5e" stroke-width="2" ${ns}/>`;
+  s+=`<text class="axislbl fs" data-fs="10" x="${cx+9}" y="${cy+15}" fill="#ff4d5e">target</text>`;
+  s+=`<text class="axislbl fs" data-fs="10" x="${cx+m*sc-2}" y="${cy-7}" text-anchor="end">downrange →</text>`;
+  s+=`<text class="axislbl fs" data-fs="10" x="${cx+7}" y="${cy-m*sc+11}">↑ cross</text>`;
   // shots: downrange = +x to the right, cross = +y upward
   e.history.forEach(h=>{
     const px = cx + h.miss[0]*sc, py = cy - h.miss[1]*sc;
     const c = PHASE_COLOR[h.phase];
-    s+=`<circle cx="${px}" cy="${py}" r="4.5" fill="${c}" fill-opacity="0.85" stroke="#0a0e1a" stroke-width="0.8"><title>#${h.round} ${h.phase} ${h.radial.toFixed(1)}m</title></circle>`;
+    s+=`<circle class="fs" data-r="4.5" cx="${px}" cy="${py}" r="4.5" fill="${c}" fill-opacity="0.9" stroke="#0a0e1a" stroke-width="0.8" ${ns}><title>#${h.round} ${h.phase} — ${h.radial.toFixed(1)} m (dr ${h.miss[0].toFixed(1)}, cr ${h.miss[1].toFixed(1)})</title></circle>`;
   });
-  $('beaten').innerHTML = s;
+  $('beaten').innerHTML = vpWrap('beaten', s);
+  applyVp('beaten');
 }
 
 /* ---- 3. Convergence chart ---- */
@@ -333,7 +422,11 @@ function drawConvergence(e){
         x:{title:{display:true,text:'round',color:'#6f8bb0'}, grid:{color:'#142036'}, ticks:{color:'#6f8bb0'}}
       },
       plugins:{legend:{display:false},
-        tooltip:{callbacks:{afterLabel:(ctx)=> ctx.datasetIndex===0 ? e.history[ctx.dataIndex].phase : ''}}}
+        tooltip:{callbacks:{afterLabel:(ctx)=> ctx.datasetIndex===0 ? e.history[ctx.dataIndex].phase : ''}},
+        zoom:{
+          zoom:{wheel:{enabled:true}, pinch:{enabled:true}, mode:'xy'},
+          pan:{enabled:true, mode:'xy'}
+        }}
     }
   });
 }
@@ -360,8 +453,66 @@ function fillLearned(e){
   ).join('');
 }
 
+/* ---- Randomize: always valid, runnable values ---- */
+function randomize(){
+  const ri = (lo,hi,step)=> Math.round((lo + Math.random()*(hi-lo))/step)*step;
+  // range kept within the G7 reachable envelope so every roll runs cleanly
+  $('target_range').value   = ri(8000, 24000, 500);
+  $('target_bearing').value = ri(0, 180, 5);
+  $('told_wind_dir').value  = ri(0, 180, 5);
+  $('told_wind_speed').value= ri(0, 25, 1);
+  $('true_wind_dir').value  = ri(0, 180, 5);
+  $('true_wind_speed').value= ri(0, 25, 1);
+  $('gun_bias_dr').value    = ri(-300, 300, 10);
+  $('gun_bias_cr').value    = ri(-150, 150, 10);
+}
+
+function resetView(which){
+  if(which === 'conv'){ if(convChart) convChart.resetZoom(); }
+  else resetSvg(which);
+}
+
 $('runBtn').addEventListener('click', runEngagement);
-checkBackend().then(()=>{ if(location.search.includes('autorun')) runEngagement(); });
+$('rndBtn').addEventListener('click', randomize);
+document.querySelectorAll('[data-reset]').forEach(b=>
+  b.addEventListener('click', ()=> resetView(b.dataset.reset)));
+setupSvgZoom('arc');
+setupSvgZoom('beaten');
+checkBackend().then(()=>{
+  if(location.search.includes('autorun')) runEngagement();
+  if(location.search.includes('selftest')) selfTest();
+});
+
+/* QA hook (inert unless ?selftest=1): drive zoom/pan/randomize/reset and
+   report PASS/FAIL via the document title. Not used in normal operation. */
+async function selfTest(){
+  const out = [];
+  try{
+    await runEngagement();
+    // SVG wheel-zoom on the beaten zone
+    const sv = $('beaten'), r = sv.getBoundingClientRect();
+    sv.dispatchEvent(new WheelEvent('wheel',{deltaY:-300,clientX:r.left+r.width/2,
+      clientY:r.top+r.height/2,bubbles:true,cancelable:true}));
+    out.push('zoom '+(svgState.beaten.k>1?'PASS':'FAIL')+'('+svgState.beaten.k.toFixed(2)+')');
+    // SVG drag-pan
+    sv.dispatchEvent(new MouseEvent('mousedown',{clientX:r.left+40,clientY:r.top+40,bubbles:true}));
+    window.dispatchEvent(new MouseEvent('mousemove',{clientX:r.left+90,clientY:r.top+70,bubbles:true}));
+    window.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+    out.push('pan '+(svgState.beaten.tx!==0?'PASS':'FAIL'));
+    // reset
+    resetView('beaten');
+    out.push('reset '+(svgState.beaten.k===1&&svgState.beaten.tx===0?'PASS':'FAIL'));
+    // chart zoom plugin
+    const z = convChart && convChart.options.plugins.zoom && typeof convChart.resetZoom==='function';
+    out.push('chartzoom '+(z?'PASS':'FAIL'));
+    // randomize within bounds
+    randomize();
+    const tr=+$('target_range').value, gd=+$('gun_bias_dr').value, ws=+$('true_wind_speed').value;
+    const ok = tr>=8000&&tr<=24000 && gd>=-300&&gd<=300 && ws>=0&&ws<=25;
+    out.push('rnd '+(ok?'PASS':'FAIL'));
+  }catch(err){ out.push('ERR '+err.message); }
+  document.title = 'SELFTEST | ' + out.join(' | ');
+}
 </script>
 </body>
 </html>

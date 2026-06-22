@@ -21,6 +21,7 @@ import numpy as np
 
 from physics.trajectory import integrate_trajectory
 from physics.met_message import MetMessage
+from physics.horizontal_met import HorizontalMetField
 from physics.state_estimator import (GunBiasEstimator, AtmosphericStateEstimator,
                                      wind_sensitivity)
 
@@ -51,9 +52,22 @@ def _world_to_rc(vec_world, bearing_deg):
 # MET with an added uniform wind (the effective atmospheric correction).
 # ===========================================================================
 def _met_plus_uniform_wind(base_met, add_world_xy):
-    """Return a new MetMessage equal to base_met but with a uniform wind vector
+    """Return a new MET equal to base_met but with a uniform wind vector
     (world xy) added to every zone. Used to bake the estimated/true effective
-    wind correction into the MET that the frozen integrator consumes."""
+    wind correction into the MET that the frozen integrator consumes.
+
+    Component 12: a HorizontalMetField is handled by adding the uniform wind to
+    BOTH its gun and target profiles and rebuilding the field (same target range
+    and confidence floor), so the estimator's effective-wind correction applies
+    to a horizontally-varying field exactly as it does to a plain MetMessage.
+    The engagement loop is therefore unchanged whether it is given a MetMessage
+    or a HorizontalMetField."""
+    if getattr(base_met, "is_horizontal", False):
+        return HorizontalMetField(
+            _met_plus_uniform_wind(base_met.gun_met, add_world_xy),
+            _met_plus_uniform_wind(base_met.target_met, add_world_xy),
+            base_met.target_range_m,
+            confidence_floor=base_met.confidence_floor)
     ax, ay = float(add_world_xy[0]), float(add_world_xy[1])
     lines = []
     for ln in base_met.lines:
@@ -159,7 +173,8 @@ def _save_gun_bias(db, weapon_id, weapon_type, gun_bias, n_eng, total_rounds):
 def run_engagement(weapon_id, target_range, target_bearing,
                    met_message, true_conditions, db=None,
                    n_register=2, n_adjust=4, n_ffe=4,
-                   weapon_type="155mm-M107", converge_threshold_m=40.0):
+                   weapon_type="155mm-M107", converge_threshold_m=40.0,
+                   observation_noise_m=0.0, noise_seed=None):
     """
     Runs a complete Phase 2 fire mission against a target.
 
@@ -168,6 +183,17 @@ def run_engagement(weapon_id, target_range, target_bearing,
          "gun_bias": (dr_m, cr_m)}          # the gun's real constant offset
       The real fall of shot = integrate(true_met) + gun_bias. The told
       `met_message` is the imperfect MET the fire-control computer uses.
+
+    observation_noise_m: std dev (m, per axis) of the measurement error in the
+      REPORTED fall of shot (Component 13). Nobody measures the impact with a
+      ruler: a forward observer / drone / radar estimates the miss with error.
+      The true physics is untouched — the shell really lands where the frozen
+      integrator says — but the miss the ESTIMATORS learn from is the true miss
+      plus N(0, observation_noise_m) per axis, and the Kalman/RLS measurement-
+      noise term is raised to match. Default 0.0 reproduces perfect observation
+      bit-for-bit. ~10-20 m is realistic for a competent optical/laser observer
+      at multi-km range; a precise drone/radar is smaller, a degraded visual
+      observer larger. noise_seed makes the realization reproducible.
 
     Doctrine:
       1. REGISTRATION — fire under a known-good MET (== true_met) so every miss
@@ -180,6 +206,23 @@ def run_engagement(weapon_id, target_range, target_bearing,
     """
     true_met = true_conditions["true_met"]
     true_gun = np.asarray(true_conditions["gun_bias"], dtype=float)
+
+    # --- Observation noise (Component 13): a seedable measurement error on the
+    # REPORTED fall of shot. Applied only where the miss is handed to an
+    # estimator, never to the true physics. obs_var feeds the filters' R term.
+    obs_noise = float(observation_noise_m)
+    if obs_noise < 0.0:
+        raise ValueError("observation_noise_m must be >= 0")
+    obs_var = obs_noise ** 2
+    _rng = np.random.default_rng(noise_seed) if obs_noise > 0.0 else None
+
+    def observe(true_miss):
+        """The fall of shot the estimators LEARN from: the true miss as reported
+        by a noisy sensor. With observation_noise_m=0 this is the true miss
+        unchanged (bit-for-bit); otherwise true_miss + N(0, obs_noise) per axis."""
+        if _rng is None:
+            return true_miss
+        return true_miss + _rng.normal(0.0, obs_noise, size=2)
 
     # Fire-control elevation from the TOLD MET (the nominal solution).
     elevation = _solve_elevation(met_message, target_range, target_bearing)
@@ -199,10 +242,15 @@ def run_engagement(weapon_id, target_range, target_bearing,
         _ensure_phase2_columns(db)
         warm = _load_gun_bias(db, weapon_id)
     warm_started = warm is not None
+    # The measurement-noise term is the filters' assumed model floor PLUS the
+    # observation noise (the correct place to tell a Kalman filter how noisy its
+    # measurements are). obs_var=0 leaves the established R values untouched.
     estA = GunBiasEstimator(init=tuple(warm) if warm_started else (0.0, 0.0),
-                            init_P=(100.0 if warm_started else 1.0e4), R=400.0)
+                            init_P=(100.0 if warm_started else 1.0e4),
+                            R=400.0 + obs_var)
     estB = AtmosphericStateEstimator([0.0, 0.0], np.diag([25.0, 25.0]),
-                                     np.diag([0.05, 0.05]), np.diag([2500.0, 2500.0]))
+                                     np.diag([0.05, 0.05]),
+                                     np.diag([2500.0 + obs_var, 2500.0 + obs_var]))
 
     history = []          # list of (phase, miss_vector)
     round_no = 0
@@ -226,9 +274,11 @@ def run_engagement(weapon_id, target_range, target_bearing,
     # gun offset = miss + current estimate.
     for _ in range(n_register):
         predicted = _impact_rc(true_met, elevation, target_bearing) + estA.state()
-        miss = observed_rc() - predicted               # = true_gun - estA
+        miss = observed_rc() - predicted               # = true_gun - estA (true)
         log_miss("REGISTRATION", miss)
-        estA.update(miss + estA.state())               # absolute gun observation
+        # The estimator learns from the NOISY reported miss; the true fall of
+        # shot (logged above) is what really happened.
+        estA.update(observe(miss) + estA.state())      # absolute gun observation
         if float(np.hypot(*miss)) < converge_threshold_m and round_no >= 1:
             break
     round_after_reg = round_no
@@ -241,7 +291,7 @@ def run_engagement(weapon_id, target_range, target_bearing,
         miss = observed_rc() - predicted
         log_miss("ADJUSTMENT", miss)
         estB.predict()
-        estB.update(miss, H)
+        estB.update(observe(miss), H)                  # learn from noisy report
         if float(np.hypot(*miss)) < 0.5 * converge_threshold_m and round_no >= round_after_reg + 1:
             break
 
@@ -318,7 +368,8 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
                                    lethal_radius_m=8.0, max_rounds=15,
                                    min_learning_rounds=2,
                                    weapon_type="155mm-M107",
-                                   target_height_m=0.0):
+                                   target_height_m=0.0,
+                                   observation_noise_m=0.0, noise_seed=None):
     """
     Fires, learns from each miss, and STOPS the instant a round lands within
     lethal_radius_m of the target (target destroyed) — or when max_rounds is
@@ -334,6 +385,12 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
       rarely lands within lethal radius; the system needs a couple of
       observations to learn the gun bias and atmospheric error).
     target_height_m: passed through to the integrator (Component 8).
+    observation_noise_m: std dev (m, per axis) of measurement error on the
+      REPORTED fall of shot (Component 13). The estimators learn from the noisy
+      report; the KILL assessment uses the TRUE fall of shot (a round physically
+      within lethal_radius is effect-achieved — a BDA system would confirm it,
+      see DATA_SOURCES_AND_SCOPE.md). 0.0 reproduces perfect observation
+      bit-for-bit. noise_seed makes the realization reproducible.
 
     Doctrine: a remembered weapon (gun bias in the DB) skips registration and
     fires for effect immediately; an unknown weapon fires a brief registration
@@ -348,6 +405,21 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
     true_met = true_conditions["true_met"]
     true_gun = np.asarray(true_conditions["gun_bias"], dtype=float)
     told_met = met_message
+
+    # Observation noise (Component 13) — applied only to the miss the estimators
+    # learn from, never to the true physics or the kill assessment.
+    obs_noise = float(observation_noise_m)
+    if obs_noise < 0.0:
+        raise ValueError("observation_noise_m must be >= 0")
+    obs_var = obs_noise ** 2
+    _rng = np.random.default_rng(noise_seed) if obs_noise > 0.0 else None
+
+    def observe(true_miss):
+        """Noisy sensor report of the true miss for the estimators. With
+        observation_noise_m=0 returns the true miss unchanged (bit-for-bit)."""
+        if _rng is None:
+            return true_miss
+        return true_miss + _rng.normal(0.0, obs_noise, size=2)
 
     # Height-aware impact in the range/cross frame (None if unreachable).
     def imp(met, elev):
@@ -394,10 +466,14 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
         _ensure_phase2_columns(db)
         warm = _load_gun_bias(db, weapon_id)
     warm_started = warm is not None
+    # Raise the filters' measurement-noise term to reflect the observation noise
+    # (obs_var=0 leaves the established R values untouched -> bit-for-bit).
     estA = GunBiasEstimator(init=tuple(warm) if warm_started else (0.0, 0.0),
-                            init_P=(100.0 if warm_started else 1.0e4), R=400.0)
+                            init_P=(100.0 if warm_started else 1.0e4),
+                            R=400.0 + obs_var)
     estB = AtmosphericStateEstimator([0.0, 0.0], np.diag([25.0, 25.0]),
-                                     np.diag([0.05, 0.05]), np.diag([2500.0, 2500.0]))
+                                     np.diag([0.05, 0.05]),
+                                     np.diag([2500.0 + obs_var, 2500.0 + obs_var]))
 
     obs_true = imp(true_met, elevation)        # constant realized impact (hidden)
     if obs_true is None:
@@ -428,7 +504,7 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
                 break
             miss = true_gun - estA.state()
             log("REGISTRATION", miss, False)
-            estA.update(miss + estA.state())
+            estA.update(observe(miss) + estA.state())   # learn from noisy report
             if float(np.hypot(*miss)) < 10.0:
                 break
 
@@ -438,8 +514,9 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
         corrected_met = _met_plus_uniform_wind(
             told_met, _rc_to_world(estB.state(), target_bearing))
         pred = imp(corrected_met, elevation)
-        # Accuracy miss vs the target (the aim correction cancels out): as the
-        # estimators converge this collapses toward zero.
+        # TRUE accuracy miss vs the target (the aim correction cancels out): as
+        # the estimators converge this collapses toward zero. The kill is judged
+        # on this real fall of shot, NOT on the noisy observation.
         miss = (obs_true + true_gun) - (pred + estA.state())
         radial = float(np.hypot(*miss))
 
@@ -453,7 +530,7 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
 
         log("ADJUSTMENT", miss, False)
         estB.predict()
-        estB.update(miss, H)
+        estB.update(observe(miss), H)                 # learn from noisy report
 
     if final_miss is None and history:
         final_miss = history[-1]["radial"]

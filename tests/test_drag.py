@@ -79,6 +79,10 @@ def test_layer2_drag_coefficient_uses_local_temperature():
 
 
 def _frozen_const(**kw):
+    # Reproduce the Component 2/3/4 constant-Cd path, which predates spin drift
+    # (Component 10) and Coriolis (Component 11): disable both to isolate drag.
+    kw.setdefault("spin_drift", False)
+    kw.setdefault("coriolis", False)
     return integrate_trajectory(use_g7=False,
                                 **{"v0": 827.0, "elevation_deg": 45.0, **kw})
 

@@ -27,14 +27,59 @@ from physics.drag import drag_coefficient
 
 G0 = 9.80665  # m/s^2, gravitational acceleration (matches ISA datum)
 
+# Component 11 — Coriolis effect from the Earth's rotation. The ground turns
+# under the shell during its (up to ~100 s) flight, so a long-range round lands a
+# deterministic, predictable offset from where it would on a non-rotating Earth.
+# Standard treatment (McCoy, "Modern Exterior Ballistics", artillery Coriolis):
+# the Coriolis acceleration is a = -2 * Omega x v, with Omega the Earth's angular
+# velocity vector. Earth's rotation rate:
+OMEGA_EARTH = 7.292e-5  # rad/s
+#
+# FRAME CONVENTION (documented and consistent with Component 10): the integrator
+# works in a right-handed local ENU frame -- x = East, y = North, z = Up -- so
+# x_hat x y_hat = z_hat. The firing azimuth_deg is the angle of the shot in this
+# frame (the velocity is fired along (cos az, sin az) in (East, North)). At
+# latitude phi the Earth's angular velocity has NO east component, a north
+# component Omega*cos(phi), and an up component Omega*sin(phi):
+#     Omega_ENU = (0, Omega*cos(phi), Omega*sin(phi))
+# With a = -2 Omega x v this reproduces the textbook result that, in the Northern
+# hemisphere, a projectile is deflected to the RIGHT of its line of fire; the
+# Southern hemisphere (phi < 0) flips it. The effect is a known correctable
+# shift, NOT a random error. Like spin drift it is treated as absent in vacuum
+# mode (the idealized non-rotating analytical reference used for validation).
+
 # NOTE: Cd = 0.30 is the legacy PLACEHOLDER constant drag coefficient from
 # Component 2. The realistic default is now the Mach-dependent G7 model
 # (Component 5, use_g7=True); the constant is retained only for the
 # use_g7=False path that reproduces the Component 2/3/4 validation results.
 CD_PLACEHOLDER = 0.30
 
+# Component 10 — gyroscopic spin drift (yaw of repose), the defining feature of
+# the STANAG 4355 Modified Point Mass model. A spin-stabilised shell sits at a
+# tiny steady "yaw of repose" angle to its flight path; the resulting side force
+# drifts it consistently to one side (to the shooter's right for the standard
+# right-hand-twist barrel). Reference: McCoy, "Modern Exterior Ballistics",
+# ch. 9-12 (yaw of repose) and STANAG 4355 (Modified Point Mass).
+#
+# Form used (McCoy's practical yaw-of-repose scaling): the lateral acceleration
+# is proportional to the spin rate divided by the airspeed, times the component
+# of gravity perpendicular to the velocity (the rate at which gravity turns the
+# velocity vector — the driver of the yaw of repose):
+#     a_lat = sign * K_SD * (p / V) * g * cos(gamma)
+# where p is the spin rate, V the speed, and cos(gamma) = V_horizontal / V (so
+# the term vanishes for a purely vertical shot and peaks near apex). K_SD is a
+# single dimensionless coefficient that lumps the MPM aerodynamic/inertia
+# constants (C_Lalpha, C_Malpha, axial inertia); it is calibrated ONCE to the
+# published 155mm M107 spin-drift magnitude (order tens of metres at ~20-30 km),
+# not tuned per scenario. Spin rate and direction come from the barrel twist and
+# muzzle velocity, so the drift scales with the physics rather than a fixed
+# number. Spin decay over the flight is slow for a stable shell and is neglected
+# (p held at its muzzle value), a standard MPM simplification.
+SPIN_DRIFT_COEFF = 0.0005
 
-def _acceleration(state, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale):
+
+def _acceleration(state, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale,
+                  spin_p, spin_dir, ux, uy, cor_on, cor_omega):
     """
     Acceleration vector a = (F_gravity + F_drag) / mass at the given state.
 
@@ -75,7 +120,18 @@ def _acceleration(state, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale):
             # zone at this altitude, overriding the constant wind argument and
             # the plain atmosphere() lookup. This delivers altitude-varying
             # conditions into the exact same relative-airspeed drag mechanism.
-            zone = met.sample(z_lookup)
+            #
+            # Component 12: if the MET is a horizontally-varying field it also
+            # depends on the shell's current DOWNRANGE distance, so it is sampled
+            # by both downrange and altitude. The plain MetMessage path (else)
+            # is untouched, so the altitude-only behaviour is bit-for-bit
+            # preserved; a field whose gun and target profiles are equal also
+            # reproduces it exactly (the field interpolates a + f*(b - a)).
+            if getattr(met, "is_horizontal", False):
+                downrange = float(np.hypot(state[0], state[1]))
+                zone = met.sample_at(downrange, z_lookup)
+            else:
+                zone = met.sample(z_lookup)
             wind_here = zone["wind_vector"]
             rho = zone["density_kgm3"]
             local_temp_K = zone["temp_C"] + 273.15
@@ -97,12 +153,42 @@ def _acceleration(state, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale):
             drag_force = -0.5 * rho * speed_rel * cd_eff * area * v_rel
             acc = acc + drag_force / mass
 
+        # Component 10: gyroscopic spin drift (yaw of repose). Aerodynamic, so it
+        # only acts when there is air (inside this `not vacuum` block) and only
+        # when enabled (spin_p > 0). The lateral acceleration is applied in the
+        # horizontal direction PERPENDICULAR to the firing line, perp = (uy,-ux),
+        # which is the shooter's right for a right-hand twist. cos_gamma is built
+        # from the ALONG-firing horizontal speed (v . firing_unit), not the total
+        # horizontal speed, so the (small) cross drift it produces does not feed
+        # back into its own magnitude — a purely vertical shot has v_along = 0
+        # and therefore zero drift. With spin_p == 0 the term is absent and the
+        # trajectory is bit-for-bit the pre-spin-drift result.
+        if spin_p > 0.0:
+            speed = np.linalg.norm(vel)
+            if speed > 0.0:
+                v_along = vel[0] * ux + vel[1] * uy        # horizontal speed along firing
+                cos_gamma = abs(v_along) / speed
+                a_mag = spin_dir * SPIN_DRIFT_COEFF * (spin_p / speed) * G0 * cos_gamma
+                acc[0] += a_mag * uy
+                acc[1] += a_mag * (-ux)
+
+        # Component 11: Coriolis acceleration from the Earth's rotation,
+        # a = -2 * Omega x v (McCoy). cor_omega is the Earth's angular velocity
+        # expressed in the local ENU frame (set from the latitude). With cor_on
+        # False the term is absent and the trajectory is bit-for-bit unchanged.
+        # It is grouped with the aerodynamic terms here so vacuum mode (the
+        # analytical reference) excludes it too.
+        if cor_on:
+            acc = acc - 2.0 * np.cross(cor_omega, vel)
+
     return np.concatenate(([vel[0], vel[1], vel[2]], acc))
 
 
-def _rk4_step(state, dt, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale):
+def _rk4_step(state, dt, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale,
+              spin_p, spin_dir, ux, uy, cor_on, cor_omega):
     """One classic RK4 step. Returns the new length-6 state."""
-    args = (mass, area, Cd, vacuum, wind, met, use_g7, bc_scale)
+    args = (mass, area, Cd, vacuum, wind, met, use_g7, bc_scale,
+            spin_p, spin_dir, ux, uy, cor_on, cor_omega)
     k1 = _acceleration(state, *args)
     k2 = _acceleration(state + 0.5 * dt * k1, *args)
     k3 = _acceleration(state + 0.5 * dt * k2, *args)
@@ -113,10 +199,39 @@ def _rk4_step(state, dt, mass, area, Cd, vacuum, wind, met, use_g7, bc_scale):
 def integrate_trajectory(v0=827.0, elevation_deg=45.0, azimuth_deg=0.0,
                          mass=43.2, area=0.018869, Cd=CD_PLACEHOLDER, dt=0.01,
                          vacuum=False, wind=(0.0, 0.0, 0.0), met=None,
-                         use_g7=True, bc_scale=1.0, target_height_m=0.0):
+                         use_g7=True, bc_scale=1.0, target_height_m=0.0,
+                         spin_drift=True, twist_rate_cal=20.0, spin_right=True,
+                         coriolis=True, latitude_deg=20.0):
     """
     Flies a point-mass shell through the ISA atmosphere until it reaches the
     target's altitude.
+
+    coriolis: include the Coriolis deflection from the Earth's rotation, a
+        -2*Omega x v acceleration (McCoy). Default True (the realistic model).
+        It is a DETERMINISTIC, correctable shift (not a random error). False
+        reproduces the prior non-rotating-Earth result bit-for-bit; it is also
+        absent in vacuum mode (the idealized analytical reference). See
+        OMEGA_EARTH for the formulation and ENU frame convention.
+    latitude_deg: gun latitude in degrees. Positive = Northern hemisphere
+        (deflects right), negative = Southern (deflects left). Default 20.0
+        (a mid-latitude, India-relevant choice). With the firing azimuth (the
+        existing azimuth_deg parameter) this sets the Coriolis direction and
+        magnitude; the effect is strongest toward the poles and the cross-range
+        part vanishes at the equator where sin(latitude) = 0.
+
+    spin_drift: include gyroscopic spin drift (yaw of repose), the defining
+        feature of the STANAG 4355 Modified Point Mass model. Default True (the
+        realistic model). False removes the term entirely and reproduces the
+        prior point-mass result BIT-FOR-BIT (used where exact reproduction is
+        asserted). The effect is aerodynamic, so it is also absent when
+        vacuum=True. See SPIN_DRIFT_COEFF for the formulation and citation.
+    twist_rate_cal: barrel rifling twist in calibers per turn. The 155mm
+        standard is ~20 cal/turn (documented default); this and v0 set the
+        muzzle spin rate p = 2*pi*v0 / (twist_rate_cal * d), so the drift scales
+        with the physics, not a fixed number.
+    spin_right: True = right-hand twist -> drifts to the shooter's RIGHT (the
+        standard for 155mm), which is -y in this x-forward, z-up right-handed
+        frame. False = left-hand twist -> drifts left (symmetric).
     vacuum=True disables drag (for validation against analytical formulas).
     Calls physics.atmosphere.atmosphere() each step for air density (when not vacuum).
 
@@ -184,6 +299,27 @@ def integrate_trajectory(v0=827.0, elevation_deg=45.0, azimuth_deg=0.0,
     theta = np.radians(elevation_deg)
     phi = np.radians(azimuth_deg)
 
+    # Spin drift setup. The muzzle spin rate comes from the barrel twist and v0;
+    # the direction comes from the twist hand and is applied perpendicular to the
+    # firing line (ux, uy) = (cos phi, sin phi). Disabled (spin_p = 0) when
+    # spin_drift is off or in vacuum, which leaves the integration bit-for-bit
+    # unchanged.
+    ux, uy = np.cos(phi), np.sin(phi)
+    if spin_drift and not vacuum:
+        diameter = 2.0 * np.sqrt(area / np.pi)          # 0.155 m for the M107 area
+        spin_p = 2.0 * np.pi * v0 / (twist_rate_cal * diameter)   # rad/s
+        spin_dir = 1.0 if spin_right else -1.0           # right-hand twist -> right
+    else:
+        spin_p = 0.0
+        spin_dir = 0.0
+
+    # Coriolis setup: Earth's angular velocity in the local ENU frame
+    # (East, North, Up) at the gun latitude. Disabled (cor_on False) when
+    # coriolis is off or in vacuum, leaving the integration bit-for-bit unchanged.
+    cor_on = bool(coriolis and not vacuum)
+    lat = np.radians(latitude_deg)
+    cor_omega = np.array([0.0, OMEGA_EARTH * np.cos(lat), OMEGA_EARTH * np.sin(lat)])
+
     # Initial velocity components. Horizontal speed splits by azimuth.
     v_horiz = v0 * np.cos(theta)
     vx = v_horiz * np.cos(phi)
@@ -211,7 +347,8 @@ def integrate_trajectory(v0=827.0, elevation_deg=45.0, azimuth_deg=0.0,
 
     while True:
         new_state = _rk4_step(state, dt, mass, area, Cd, vacuum, wind, met,
-                              use_g7, bc_scale)
+                              use_g7, bc_scale, spin_p, spin_dir, ux, uy,
+                              cor_on, cor_omega)
         steps += 1
         apex = max(apex, new_state[2])
 

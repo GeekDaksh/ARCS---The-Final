@@ -143,12 +143,23 @@ def _trajectory_path(v0, elevation_deg, azimuth_deg, met, dt=0.01, sample_every=
     state = np.array([0.0, 0.0, 0.0, vx, vy, vz])
 
     mass, area, Cd = 43.2, 0.018869, _p2traj.CD_PLACEHOLDER
+    # Component 10 spin-drift params (match integrate_trajectory's defaults), so
+    # the drawn arc is consistent with the real validated physics.
+    diameter = 2.0 * np.sqrt(area / np.pi)
+    spin_p = 2.0 * np.pi * v0 / (20.0 * diameter)   # standard ~20 cal/turn, right-hand
+    spin_dir, ux, uy = 1.0, np.cos(phi), np.sin(phi)
+    # Coriolis (Component 11) at the default mid-latitude, matching the integrator.
+    lat = np.radians(20.0)
+    cor_on = True
+    cor_omega = np.array([0.0, _p2traj.OMEGA_EARTH * np.cos(lat),
+                          _p2traj.OMEGA_EARTH * np.sin(lat)])
     pts = [[0.0, 0.0, 0.0]]
     speeds = [float(np.linalg.norm(state[3:6]))]   # real speed (m/s) per point
     step = 0
     while step < 10_000_000:
         new = _p2traj._rk4_step(state, dt, mass, area, Cd, False,
-                                (0.0, 0.0, 0.0), met, True, 1.0)
+                                (0.0, 0.0, 0.0), met, True, 1.0,
+                                spin_p, spin_dir, ux, uy, cor_on, cor_omega)
         step += 1
         # Impact at the target altitude on the descending branch (z = 0 default).
         if new[2] < target_height_m <= state[2]:
@@ -167,6 +178,13 @@ def _trajectory_path(v0, elevation_deg, azimuth_deg, met, dt=0.01, sample_every=
 @app.route("/p2")
 def p2_index():
     resp = make_response(send_from_directory(".", "arcs_p2.html"))
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/p2/sim")
+def p2_sim_index():
+    resp = make_response(send_from_directory(".", "arcs_p2_sim.html"))
     resp.headers["Cache-Control"] = "no-cache"
     return resp
 

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARCS Phase 2 — 3D Mission Visualizer</title>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  :root{
+    --bg:#030609; --surface:rgba(6,16,34,0.92); --border:rgba(0,225,255,0.14);
+    --accent:#00E1FF; --fire:#FF9F1C; --hit:#00FF94; --miss:#FF2040;
+    --warn:#FFB300; --text:#EAF4FF; --muted:#6f8bb0;
+    --reg:#FF9F1C; --adj:#00E1FF; --ffe:#00FF94;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px;overflow:hidden}
+  #c3d,#c2d{position:fixed;inset:0;width:100%;height:100%;display:block}
+  #c2d{display:none;background:#040810}
+  .panel{position:fixed;background:var(--surface);border:1px solid var(--border);
+    border-radius:10px;padding:13px 14px;backdrop-filter:blur(6px);z-index:10}
+  h2,h3{margin:0;font-weight:600;letter-spacing:.05em}
+  .ttl{font-size:11px;color:#bfe7ff;text-transform:uppercase;letter-spacing:.12em;
+    margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:7px}
+
+  /* top bar */
+  #top{top:12px;left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;
+    padding:9px 14px}
+  #top .brand{font-size:15px;color:#eaf4ff}
+  #top .brand b{color:var(--accent);font-weight:600}
+  .badges{display:flex;gap:10px;align-items:center}
+  .badge{padding:4px 10px;border:1px solid var(--border);border-radius:12px;font-size:10px;
+    letter-spacing:.06em;display:flex;align-items:center;gap:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .dot.ok{background:var(--hit);box-shadow:0 0 8px var(--hit)}
+  .dot.off{background:var(--miss);box-shadow:0 0 8px var(--miss)}
+  .dot.run{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  .seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .seg button{background:transparent;color:var(--muted);border:none;padding:6px 12px;
+    font-family:inherit;font-size:11px;cursor:pointer}
+  .seg button.on{background:rgba(0,225,255,.16);color:var(--accent)}
+
+  /* controls (left) */
+  #ctrl{top:70px;left:12px;width:235px;max-height:calc(100vh - 150px);overflow:auto}
+  .row{display:flex;gap:8px;margin-bottom:8px}
+  .fld{flex:1;display:flex;flex-direction:column;gap:4px}
+  .fld label{color:var(--muted);font-size:10px;letter-spacing:.03em}
+  .fld input{background:#0a1424;border:1px solid var(--border);color:var(--text);
+    border-radius:5px;padding:6px 7px;font-family:inherit;font-size:12px;width:100%}
+  .fld input:focus{outline:none;border-color:var(--accent)}
+  .chk{display:flex;align-items:center;gap:7px;color:var(--muted);margin-bottom:10px}
+  .btns{display:flex;gap:8px;margin-top:4px}
+  button.act{flex:1;background:linear-gradient(180deg,#0596b8,#046c86);color:#eaffff;
+    border:1px solid var(--accent);border-radius:7px;padding:9px;font-family:inherit;
+    font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.04em}
+  button.act:hover{background:linear-gradient(180deg,#07b6dd,#0596b8)}
+  button.act.alt{background:linear-gradient(180deg,#13314a,#0d2236);color:#bfe7ff;border-color:var(--border)}
+  button.act:disabled{opacity:.5;cursor:default}
+
+  /* telemetry (right) */
+  #tele{top:70px;right:12px;width:248px}
+  .stat{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(0,225,255,.06)}
+  .stat .k{color:var(--muted)}
+  .stat .v{color:var(--text);font-variant-numeric:tabular-nums}
+  .phasechip{padding:1px 8px;border-radius:9px;font-size:10px;border:1px solid currentColor}
+  .lvt{width:100%;border-collapse:collapse;margin-top:6px}
+  .lvt td{padding:4px 4px;border-bottom:1px solid rgba(0,225,255,.06);font-size:11px}
+  .lvt td:first-child{color:var(--muted)}
+  .lvt .est{color:var(--accent);text-align:right}
+  .lvt .tru{color:#eaf4ff;text-align:right}
+  .outcome{margin-top:10px;padding:9px;border-radius:7px;text-align:center;font-size:12px;
+    border:1px solid var(--border);color:var(--muted)}
+  .outcome.kill{border-color:var(--hit);color:var(--hit);background:rgba(0,255,148,.08);font-weight:600}
+  .outcome.fail{border-color:var(--warn);color:var(--warn);background:rgba(255,179,0,.07)}
+
+  /* bottom bar: camera + vertical scale */
+  #bottom{bottom:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:18px;
+    padding:9px 16px}
+  #bottom .grp{display:flex;align-items:center;gap:8px}
+  .mini{background:#0a1424;border:1px solid var(--border);color:var(--muted);border-radius:6px;
+    padding:5px 10px;font-family:inherit;font-size:11px;cursor:pointer}
+  .mini:hover,.mini.on{border-color:var(--accent);color:var(--accent)}
+  #vexLabel{color:var(--accent);min-width:128px}
+  input[type=range]{accent-color:var(--accent);width:130px}
+
+  /* offline overlay */
+  #offline{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(3,6,9,.82);z-index:50}
+  #offline.show{display:flex}
+  #offline .box{border:1px solid var(--miss);background:rgba(255,32,64,.08);border-radius:12px;
+    padding:26px 34px;text-align:center;max-width:440px}
+  #offline .box h3{color:var(--miss);font-size:16px;letter-spacing:.1em;margin-bottom:10px}
+  #offline .box p{color:#ffd2d6;line-height:1.6}
+  #banner{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;
+    font-size:30px;font-weight:700;letter-spacing:.14em;color:var(--hit);
+    text-shadow:0 0 24px rgba(0,255,148,.6);display:none;pointer-events:none}
+  #banner.show{display:block;animation:pop .4s ease-out}
+  @keyframes pop{from{transform:translate(-50%,-50%) scale(.7);opacity:0}to{transform:translate(-50%,-50%) scale(1);opacity:1}}
+  .legend{display:flex;gap:12px;font-size:10px;color:var(--muted);margin-top:8px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}
+</style>
+</head>
+<body>
+<canvas id="c3d"></canvas>
+<canvas id="c2d"></canvas>
+
+<div id="banner">◎ TARGET DESTROYED</div>
+
+<!-- TOP BAR -->
+<div class="panel" id="top">
+  <div class="brand">ARCS <b>// Phase 2 Mission Visualizer</b></div>
+  <div class="badges">
+    <span class="badge"><span class="dot" id="beDot"></span><span id="beTxt">checking…</span></span>
+    <span class="badge"><span class="dot" id="msDot"></span><span id="msTxt">no mission</span></span>
+    <div class="seg" id="viewSeg">
+      <button data-view="3d" class="on">3D</button>
+      <button data-view="2d">2D side-on</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONTROLS -->
+<div class="panel" id="ctrl">
+  <div class="ttl">Mission Parameters</div>
+  <div class="row">
+    <div class="fld"><label>Target range (m)</label><input id="target_range" type="number" value="22000" step="500"></div>
+    <div class="fld"><label>Bearing (°)</label><input id="target_bearing" type="number" value="0" step="5"></div>
+  </div>
+  <div class="row">
+    <div class="fld"><label>Target height (m)</label><input id="target_height_m" type="number" value="0" step="50"></div>
+    <div class="fld"><label>Lethal radius (m)</label><input id="lethal_radius_m" type="number" value="8" step="1"></div>
+  </div>
+  <div class="row">
+    <div class="fld"><label>Told wind dir (°)</label><input id="told_wind_dir" type="number" value="180" step="5"></div>
+    <div class="fld"><label>Told speed (m/s)</label><input id="told_wind_speed" type="number" value="20" step="1"></div>
+  </div>
+  <div class="row">
+    <div class="fld"><label>True wind dir (°)</label><input id="true_wind_dir" type="number" value="180" step="5"></div>
+    <div class="fld"><label>True speed (m/s)</label><input id="true_wind_speed" type="number" value="23" step="1"></div>
+  </div>
+  <div class="row">
+    <div class="fld"><label>Gun bias dr (m)</label><input id="gun_bias_dr" type="number" value="200" step="10"></div>
+    <div class="fld"><label>Gun bias cr (m)</label><input id="gun_bias_cr" type="number" value="80" step="10"></div>
+  </div>
+  <div class="row">
+    <div class="fld"><label>Max rounds</label><input id="max_rounds" type="number" value="15" step="1"></div>
+    <div class="fld"><label>&nbsp;</label><label class="chk"><input id="warm_start" type="checkbox"> warm start</label></div>
+  </div>
+  <div class="btns">
+    <button class="act" id="runBtn">▶ RUN MISSION</button>
+    <button class="act alt" id="rndBtn" title="randomize">🎲</button>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--reg)"></i>reg</span>
+    <span><i style="background:var(--adj)"></i>adj</span>
+    <span><i style="background:var(--ffe)"></i>ffe</span>
+  </div>
+</div>
+
+<!-- TELEMETRY -->
+<div class="panel" id="tele">
+  <div class="ttl">Telemetry</div>
+  <div class="stat"><span class="k">Round</span><span class="v" id="t-round">—</span></div>
+  <div class="stat"><span class="k">Phase</span><span class="v" id="t-phase">—</span></div>
+  <div class="stat"><span class="k">Altitude</span><span class="v" id="t-alt">—</span></div>
+  <div class="stat"><span class="k">Apex</span><span class="v" id="t-apex">—</span></div>
+  <div class="stat"><span class="k">Miss</span><span class="v" id="t-miss">—</span></div>
+  <div class="ttl" style="margin-top:14px">Learned vs Hidden Truth</div>
+  <table class="lvt"><tbody>
+    <tr><td>Gun dr</td><td class="est" id="l-gdr">—</td><td class="tru" id="l-gdrt">—</td></tr>
+    <tr><td>Gun cr</td><td class="est" id="l-gcr">—</td><td class="tru" id="l-gcrt">—</td></tr>
+    <tr><td>Wind dr</td><td class="est" id="l-wdr">—</td><td class="tru" id="l-wdrt">—</td></tr>
+    <tr><td>Wind cr</td><td class="est" id="l-wcr">—</td><td class="tru" id="l-wcrt">—</td></tr>
+  </tbody></table>
+  <div class="legend"><span style="color:var(--accent)">estimated</span><span>hidden truth →</span></div>
+  <div class="outcome" id="outcome">run a mission</div>
+</div>
+
+<!-- BOTTOM: camera + vertical scale -->
+<div class="panel" id="bottom">
+  <div class="grp">
+    <span style="color:var(--muted)">CAM</span>
+    <button class="mini" data-cam="persp">perspective</button>
+    <button class="mini" data-cam="side">side</button>
+    <button class="mini" data-cam="top">top</button>
+    <button class="mini" data-cam="reset">⟲ reset</button>
+  </div>
+  <div class="grp">
+    <input type="range" id="vexag" min="1" max="8" step="0.5" value="3">
+    <span id="vexLabel">Vertical scale: 3× (for clarity)</span>
+  </div>
+</div>
+
+<!-- OFFLINE -->
+<div id="offline">
+  <div class="box">
+    <h3>⚠ BACKEND OFFLINE</h3>
+    <p>The mission backend is unreachable. No mission data is shown — nothing is
+       fabricated. Start <code>python arcs_server.py</code> and press Run Mission.</p>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const MET_ZONES = [0,200,500,1000,1500,2000,3000,4000,5000,6000,8000,10000,12000];
+const PHASE_HEX = {REGISTRATION:0xFF9F1C, ADJUSTMENT:0x00E1FF, FIRE_FOR_EFFECT:0x00FF94};
+const PHASE_CSS = {REGISTRATION:'#FF9F1C', ADJUSTMENT:'#00E1FF', FIRE_FOR_EFFECT:'#00FF94'};
+const WORLD = 0.012;            // scene units per metre (horizontal, true scale)
+let vexag = 3.0;                // vertical exaggeration (altitude only) — honest, labelled
+
+// ---- physics-frame metres -> scene base coords (vexag applied via group.scale.y) ----
+//   x downrange -> sceneX ,  z altitude -> sceneY ,  y cross -> sceneZ
+function mapBase(p){ return new THREE.Vector3(p[0]*WORLD, p[2]*WORLD, p[1]*WORLD); }
+
+// ===================== Three.js scene =====================
+let scene, camera, renderer, controls, worldGroup, battle, bands, missionGroup, shell;
+const counterScale = [];       // meshes whose Y must be un-stretched when vexag changes
+let mission = null, play = null;
+
+function initScene(){
+  const canvas = $('c3d');
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x030609);
+  scene.fog = new THREE.FogExp2(0x030609, 0.0016);
+
+  camera = new THREE.PerspectiveCamera(52, innerWidth/innerHeight, 0.1, 6000);
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.09;
+  controls.screenSpacePanning = false;
+  controls.maxPolarAngle = Math.PI*0.495;   // don't go under the ground
+
+  scene.add(new THREE.AmbientLight(0x90b0d0, 0.7));
+  const dir = new THREE.DirectionalLight(0xbfe7ff, 0.8);
+  dir.position.set(120, 220, 90); scene.add(dir);
+
+  worldGroup = new THREE.Group(); scene.add(worldGroup);
+  battle = new THREE.Group(); bands = new THREE.Group(); missionGroup = new THREE.Group();
+  worldGroup.add(battle); worldGroup.add(bands); worldGroup.add(missionGroup);
+  worldGroup.scale.y = vexag;
+
+  buildBattlefield(22000, 4000, 0, 8);          // sensible default before any mission
+  resize();
+  addEventListener('resize', resize);
+  animate();
+}
+
+function resize(){
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  if(viewMode==='2d') draw2D();
+}
+
+function clearGroup(g){ while(g.children.length) { const c=g.children.pop(); g.remove(c);
+  if(c.geometry) c.geometry.dispose(); if(c.material) c.material.dispose(); } }
+
+// ----- battlefield: ground, grid, gun, target, lethal circle, atmosphere bands -----
+function buildBattlefield(range, apex, height, lethal){
+  clearGroup(battle); clearGroup(bands);
+  for(let i=counterScale.length-1;i>=0;i--) counterScale.splice(i,1);
+
+  const span = Math.max(range*WORLD*1.35, 60);
+  // ground
+  const gMat = new THREE.MeshBasicMaterial({color:0x081222, transparent:true, opacity:0.9});
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(span, span), gMat);
+  ground.rotation.x = -Math.PI/2; ground.position.set(span*0.42, 0, 0); battle.add(ground);
+  const grid = new THREE.GridHelper(span, 28, 0x16344e, 0x0e2236);
+  grid.position.set(span*0.42, 0.02, 0); battle.add(grid);
+
+  // gun at origin (small cyan marker)
+  const gun = new THREE.Mesh(new THREE.ConeGeometry(span*0.006, span*0.02, 12),
+    new THREE.MeshStandardMaterial({color:0x00e1ff, emissive:0x004a5a}));
+  gun.position.set(0, span*0.01, 0); battle.add(gun); counterScale.push(gun);
+
+  // target at (range, height) with its lethal-radius kill zone on the ground
+  const tgtY = height*WORLD;
+  const tgt = new THREE.Mesh(new THREE.SphereGeometry(span*0.008, 16, 16),
+    new THREE.MeshStandardMaterial({color:0xff2040, emissive:0x5a0010}));
+  tgt.position.set(range*WORLD, tgtY + span*0.008, 0); battle.add(tgt); counterScale.push(tgt);
+
+  const lr = Math.max(lethal*WORLD, span*0.003);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(lr*0.92, lr, 48),
+    new THREE.MeshBasicMaterial({color:0xff2040, side:THREE.DoubleSide, transparent:true, opacity:0.9}));
+  ring.rotation.x = -Math.PI/2; ring.position.set(range*WORLD, tgtY+0.05, 0);
+  ring.name = 'lethalRing'; battle.add(ring);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(lr, 48),
+    new THREE.MeshBasicMaterial({color:0xff2040, transparent:true, opacity:0.10, side:THREE.DoubleSide}));
+  disc.rotation.x = -Math.PI/2; disc.position.set(range*WORLD, tgtY+0.04, 0); battle.add(disc);
+
+  // atmospheric layers (translucent horizontal bands at standard MET zones)
+  const ceiling = Math.max(apex*1.35, 2200);
+  MET_ZONES.filter(z=>z>0 && z<=ceiling).forEach((z,i)=>{
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(span, span),
+      new THREE.MeshBasicMaterial({color:0x00e1ff, transparent:true,
+        opacity: i%2? 0.030:0.055, side:THREE.DoubleSide, depthWrite:false}));
+    m.rotation.x = -Math.PI/2; m.position.set(span*0.42, z*WORLD, 0); bands.add(m);
+  });
+  applyVexag();
+}
+
+function applyVexag(){
+  worldGroup.scale.y = vexag;
+  counterScale.forEach(m => m.scale.y = 1/vexag);   // keep spheres/cones round
+  if(shell) shell.scale.y = 1/vexag;
+}
+
+// ===================== camera framing =====================
+function frame(view){
+  const range = mission ? mission.mission.target_range : 22000;
+  const apex  = mission ? (mission.rounds[0]?.apex_m||4000) : 4000;
+  const cx = range*WORLD*0.5, cy = apex*WORLD*vexag*0.45, R = range*WORLD;
+  controls.target.set(cx, cy, 0);
+  if(view==='top')        camera.position.set(cx, R*0.95, 0.001);
+  else if(view==='side')  camera.position.set(cx, cy+R*0.18, R*0.92);
+  else                    camera.position.set(-R*0.18, cy+R*0.40, R*0.78); // perspective
+  camera.updateProjectionMatrix(); controls.update();
+}
+
+// ===================== mission playback =====================
+async function runMission(){
+  const body = collectParams();
+  $('runBtn').disabled = true; setMissionState('run','BUILDING…');
+  let data;
+  try{
+    const r = await fetch('/api/p2/run_mission', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(!r.ok) throw new Error('http '+r.status);
+    data = await r.json();
+    if(data.error) throw new Error(data.error);
+  }catch(e){ showOffline(true); $('runBtn').disabled=false; setMissionState('','no mission'); return; }
+  showOffline(false);
+
+  mission = data;
+  // precompute scene-space polylines (base coords; vexag applied by the group)
+  mission.rounds.forEach(rd => { rd.scenePts = rd.trajectory.map(mapBase); });
+  buildBattlefield(mission.mission.target_range,
+                   mission.rounds[0].apex_m,
+                   mission.mission.target_height_m,
+                   mission.mission.lethal_radius_m);
+  clearGroup(missionGroup); $('banner').classList.remove('show');
+
+  // shell marker
+  shell = new THREE.Mesh(new THREE.SphereGeometry(mission.mission.target_range*WORLD*0.006, 14, 14),
+    new THREE.MeshStandardMaterial({color:0xffffff, emissive:0x335577}));
+  shell.visible = false; missionGroup.add(shell); shell.scale.y = 1/vexag;
+
+  fillLearned(mission.learned);
+  frame('persp');
+  play = {idx:0, t:0, last:performance.now(), pause:0, done:false};
+  setMissionState('run','IN PROGRESS');
+  $('outcome').className='outcome'; $('outcome').textContent='mission in progress…';
+  $('runBtn').disabled = false;
+  if(viewMode==='2d') draw2D();
+}
+
+const ROUND_MS = 1500, PAUSE_MS = 420;
+
+function stepMission(now){
+  if(!play || play.done || viewMode!=='3d') return;
+  const dt = now - play.last; play.last = now;
+  if(play.pause>0){ play.pause-=dt; return; }
+  const rd = mission.rounds[play.idx];
+  play.t += dt/ROUND_MS;
+  const tt = Math.min(play.t, 1);
+  // shell position along the real backend polyline
+  const pts = rd.scenePts, f = tt*(pts.length-1), i = Math.floor(f), fr = f-i;
+  const a = pts[i], b = pts[Math.min(i+1, pts.length-1)];
+  shell.visible = true;
+  shell.position.set(a.x+(b.x-a.x)*fr, a.y+(b.y-a.y)*fr, a.z+(b.z-a.z)*fr);
+  // live telemetry
+  $('t-round').textContent = rd.round + ' / ' + mission.mission.rounds_fired;
+  setPhaseChip('t-phase', rd.phase);
+  $('t-alt').textContent = Math.round(shell.position.y/(WORLD*vexag)) + ' m';
+  $('t-apex').textContent = Math.round(rd.apex_m) + ' m';
+
+  if(tt>=1){                      // round complete -> draw arc + impact
+    drawArc(rd); dropImpact(rd);
+    $('t-miss').textContent = rd.miss_m.toFixed(1) + ' m';
+    if(rd.destroyed_target){ onDestroyed(rd); return; }
+    play.idx++; play.t=0; play.pause=PAUSE_MS;
+    if(play.idx >= mission.rounds.length){ onMissionEnd(); }
+  }
+}
+
+function drawArc(rd){
+  const geo = new THREE.BufferGeometry().setFromPoints(rd.scenePts);
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+    color:PHASE_HEX[rd.phase], transparent:true, opacity:0.85}));
+  missionGroup.add(line);
+}
+function dropImpact(rd){
+  const range = mission.mission.target_range, tgtY = mission.mission.target_height_m*WORLD;
+  const r = Math.max(mission.mission.target_range*WORLD*0.004, 0.3);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 20),
+    new THREE.MeshBasicMaterial({color:PHASE_HEX[rd.phase], side:THREE.DoubleSide}));
+  disc.rotation.x = -Math.PI/2;
+  disc.position.set(rd.impact.x*WORLD, tgtY+0.06, rd.impact.y*WORLD);
+  missionGroup.add(disc);
+}
+function onDestroyed(rd){
+  shell.visible = false; play.done = true;
+  const ring = battle.getObjectByName('lethalRing');
+  if(ring){ ring.material.color.setHex(0x00ff94); ring.material.opacity=1; }
+  $('banner').classList.add('show');
+  $('outcome').className='outcome kill';
+  $('outcome').textContent = '◎ TARGET DESTROYED — round '+rd.round+' (end of mission)';
+  setMissionState('ok','COMPLETE');
+}
+function onMissionEnd(){
+  shell.visible=false; play.done=true;
+  const m = mission.mission;
+  if(m.destroyed){ $('outcome').className='outcome kill';
+    $('outcome').textContent='◎ destroyed at round '+m.destroying_round; }
+  else { $('outcome').className='outcome fail';
+    $('outcome').textContent='✕ not destroyed within '+m.max_rounds+' rounds (safety cap)'; }
+  setMissionState('ok','COMPLETE');
+}
+
+// ===================== telemetry helpers =====================
+function setPhaseChip(id, phase){
+  const el=$(id); el.innerHTML='<span class="phasechip" style="color:'+PHASE_CSS[phase]+'">'+
+    phase.replace('FIRE_FOR_EFFECT','FFE').replace('REGISTRATION','REG').replace('ADJUSTMENT','ADJ')+'</span>';
+}
+function fillLearned(L){
+  $('l-gdr').textContent=L.gun_bias_est[0].toFixed(1); $('l-gdrt').textContent=L.gun_bias_true[0].toFixed(0);
+  $('l-gcr').textContent=L.gun_bias_est[1].toFixed(1); $('l-gcrt').textContent=L.gun_bias_true[1].toFixed(0);
+  $('l-wdr').textContent=L.atmo_correction_est[0].toFixed(2); $('l-wdrt').textContent=L.atmo_correction_true[0].toFixed(2);
+  $('l-wcr').textContent=L.atmo_correction_est[1].toFixed(2); $('l-wcrt').textContent=L.atmo_correction_true[1].toFixed(2);
+}
+function setMissionState(kind, txt){
+  $('msDot').className = 'dot '+(kind||''); $('msTxt').textContent = txt;
+}
+function showOffline(off){
+  $('offline').classList.toggle('show', off);
+  $('beDot').className='dot '+(off?'off':'ok'); $('beTxt').textContent = off?'BACKEND OFFLINE':'BACKEND ONLINE';
+  if(off){ mission=null; play=null; clearGroup(missionGroup); }
+}
+
+// ===================== params / randomize =====================
+function collectParams(){
+  return {
+    weapon_id:'HOW-SIM',
+    target_range:+$('target_range').value, target_bearing:+$('target_bearing').value,
+    target_height_m:+$('target_height_m').value, lethal_radius_m:+$('lethal_radius_m').value,
+    told_wind_dir:+$('told_wind_dir').value, told_wind_speed:+$('told_wind_speed').value,
+    true_wind_dir:+$('true_wind_dir').value, true_wind_speed:+$('true_wind_speed').value,
+    gun_bias_dr:+$('gun_bias_dr').value, gun_bias_cr:+$('gun_bias_cr').value,
+    max_rounds:+$('max_rounds').value, warm_start:$('warm_start').checked
+  };
+}
+function randomize(){
+  const ri=(lo,hi,s)=>Math.round((lo+Math.random()*(hi-lo))/s)*s;
+  $('target_range').value=ri(8000,24000,500); $('target_bearing').value=ri(0,180,5);
+  $('target_height_m').value=ri(-400,800,50); $('lethal_radius_m').value=ri(3,30,1);
+  $('told_wind_dir').value=ri(0,180,5); $('told_wind_speed').value=ri(0,25,1);
+  $('true_wind_dir').value=ri(0,180,5); $('true_wind_speed').value=ri(0,25,1);
+  $('gun_bias_dr').value=ri(-300,300,10); $('gun_bias_cr').value=ri(-150,150,10);
+}
+
+// ===================== 2D fallback (same data) =====================
+let viewMode='3d';
+function setView(v){
+  viewMode=v;
+  document.querySelectorAll('#viewSeg button').forEach(b=>b.classList.toggle('on', b.dataset.view===v));
+  $('c3d').style.display = v==='3d'?'block':'none';
+  $('c2d').style.display = v==='2d'?'block':'none';
+  $('bottom').style.display = v==='3d'?'flex':'none';
+  $('banner').style.display = v==='3d' ? '' : 'none';   // 2D canvas draws its own
+  if(v==='2d') draw2D();
+}
+function draw2D(){
+  const cv=$('c2d'); cv.width=innerWidth; cv.height=innerHeight;
+  const g=cv.getContext('2d'); g.clearRect(0,0,cv.width,cv.height);
+  if(!mission){ g.fillStyle='#6f8bb0'; g.font='14px monospace';
+    g.fillText('No mission — run one to see the 2D side-on view.', 40, 80); return; }
+  const m=mission.mission, rounds=mission.rounds;
+  const range=m.target_range, apex=rounds[0].apex_m;
+  // ---- side-on panel (top 58%) ----
+  const W=cv.width, sH=cv.height*0.58, mL=64, mR=30, mT=30, mB=40;
+  const pw=W-mL-mR, ph=sH-mT-mB;
+  const zmax=Math.max(apex*1.25, 500), xmax=range*1.12;
+  const X=x=>mL+x/xmax*pw, Y=z=>mT+ph-z/zmax*ph;
+  g.fillStyle='#9fc0e0'; g.font='11px monospace'; g.fillText('SIDE-ON  (downrange × altitude)  — true scale, auto-fit', mL, 18);
+  MET_ZONES.filter(z=>z<=zmax).forEach((z,i)=>{
+    g.fillStyle = i%2? 'rgba(0,225,255,0.045)':'rgba(0,225,255,0.025)';
+    const y1=Y(z), y0=Y(MET_ZONES[i+1]!==undefined?Math.min(MET_ZONES[i+1],zmax):zmax);
+    g.fillRect(mL,y0,pw,y1-y0);
+    g.strokeStyle='#13243a'; g.beginPath(); g.moveTo(mL,y1); g.lineTo(mL+pw,y1); g.stroke();
+    g.fillStyle='#6f8bb0'; g.fillText((z>=1000?z/1000+'k':z), 8, y1+3);
+  });
+  rounds.forEach(rd=>{
+    g.strokeStyle=PHASE_CSS[rd.phase]; g.globalAlpha=rd.destroyed_target?1:0.85;
+    g.lineWidth=rd.destroyed_target?2.4:1.4; g.beginPath();
+    rd.trajectory.forEach((p,k)=>{ const x=X(p[0]),y=Y(p[2]); k?g.lineTo(x,y):g.moveTo(x,y); });
+    g.stroke(); g.globalAlpha=1;
+  });
+  // gun + target
+  g.fillStyle='#00e1ff'; g.beginPath(); g.arc(X(0),Y(0),4,0,7); g.fill();
+  g.fillStyle='#ff2040'; g.beginPath(); g.arc(X(range),Y(m.target_height_m),5,0,7); g.fill();
+  g.fillText('target', X(range)-16, Y(m.target_height_m)-9);
+  for(let k=0;k<=4;k++){ const xv=xmax*k/4; g.fillStyle='#6f8bb0';
+    g.fillText((xv/1000).toFixed(0)+'km', X(xv)-8, sH-12); }
+
+  // ---- top-down beaten zone (bottom 42%) ----
+  const tY=sH+18, tH=cv.height-sH-30, tcx=W*0.5, tcy=tY+tH*0.5;
+  g.fillStyle='#9fc0e0'; g.fillText('TOP-DOWN  (beaten zone around target)', mL, tY-2);
+  let mm=Math.max(...rounds.map(r=>Math.max(Math.abs(r.impact.x-range),Math.abs(r.impact.y))),30)*1.25;
+  const sc=(Math.min(W*0.42,tH*0.42))/mm;
+  [0.5,1].forEach(fr=>{ g.strokeStyle='#13243a'; g.beginPath(); g.arc(tcx,tcy,fr*mm*sc,0,7); g.stroke(); });
+  // lethal circle + target
+  g.strokeStyle='#ff2040'; g.beginPath(); g.arc(tcx,tcy,m.lethal_radius_m*sc,0,7); g.stroke();
+  g.fillStyle='#ff2040'; g.beginPath(); g.arc(tcx,tcy,3,0,7); g.fill();
+  rounds.forEach(rd=>{
+    const px=tcx+(rd.impact.x-range)*sc, py=tcy-rd.impact.y*sc;
+    g.fillStyle=PHASE_CSS[rd.phase]; g.globalAlpha=0.9;
+    g.beginPath(); g.arc(px,py, rd.destroyed_target?5:3.5, 0,7); g.fill(); g.globalAlpha=1;
+  });
+  g.fillStyle='#6f8bb0'; g.fillText('lethal '+m.lethal_radius_m.toFixed(0)+' m', tcx+m.lethal_radius_m*sc+6, tcy);
+  if(m.destroyed){ g.fillStyle='#00ff94'; g.font='13px monospace';
+    g.fillText('◎ TARGET DESTROYED at round '+m.destroying_round, mL, cv.height-8); }
+}
+
+// ===================== loop / wiring =====================
+let manualDrive = false;   // selftest drives stepMission deterministically
+function animate(){ requestAnimationFrame(animate); controls.update();
+  if(!manualDrive) stepMission(performance.now()); renderer.render(scene,camera); }
+
+$('runBtn').addEventListener('click', runMission);
+$('rndBtn').addEventListener('click', randomize);
+$('vexag').addEventListener('input', e=>{ vexag=+e.target.value;
+  $('vexLabel').textContent='Vertical scale: '+vexag+'× (for clarity)'; applyVexag(); });
+document.querySelectorAll('#viewSeg button').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
+document.querySelectorAll('[data-cam]').forEach(b=>b.addEventListener('click',()=>frame(b.dataset.cam==='reset'?'persp':b.dataset.cam)));
+
+async function checkBackend(){
+  try{ const r=await fetch('/api/status'); showOffline(!r.ok); }
+  catch(e){ showOffline(true); }
+}
+
+initScene();
+checkBackend().then(()=>{
+  if(location.search.includes('autorun')) runMission();
+  if(location.search.includes('selftest')) selfTest();
+});
+
+// QA hook (inert unless ?selftest=1): run a mission, wait for the animation to
+// reach the stop, and report outcome + scene contents via the document title.
+async function selfTest(){
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  try{
+    await runMission();
+    if(!mission){ document.title='SIMTEST | FAIL offline'; return; }
+    manualDrive = true;                       // drive the animation deterministically
+    let tnow = play.last;
+    for(let i=0;i<2000 && !play.done;i++){ tnow += 200; play.pause = 0; stepMission(tnow); }
+    if(location.search.includes('view2d')) setView('2d');
+    const arcs = missionGroup.children.filter(c=>c.type==='Line').length;
+    const impacts = missionGroup.children.filter(c=>c.geometry && c.geometry.type==='CircleGeometry').length;
+    document.title='SIMTEST | destroyed='+mission.mission.destroyed
+      +' round='+mission.mission.destroying_round
+      +' rounds='+mission.mission.rounds_fired+' arcs='+arcs+' impacts='+impacts
+      +' banner='+$('banner').classList.contains('show')
+      +' gunEst='+mission.learned.gun_bias_est.map(x=>x.toFixed(0)).join(',');
+  }catch(e){ document.title='SIMTEST | ERR '+e.message; }
+}
+</script>
+</body>
+</html>
