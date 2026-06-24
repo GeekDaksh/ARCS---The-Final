@@ -117,6 +117,59 @@ def _solve_elevation(met, target_range, bearing_deg, lo=15.0, hi=48.0):
 
 
 # ===========================================================================
+# Maximum achievable range — the honest reachability guard (Option A).
+# Calls the frozen integrator (does NOT change it) to find how far this
+# projectile can actually shoot, so the engagement can refuse an impossible
+# target instead of fabricating a "destroyed" result.
+# ===========================================================================
+def max_achievable_range(weapon_params=None, met=None, target_height_m=0.0,
+                         dt=0.1, return_elev=False, **kw):
+    """
+    Maximum range this projectile can reach, found by sweeping the firing
+    elevation through the integrator and taking the largest range. Uses the
+    projectile's ACTUAL parameters (v0, mass, area, drag, ...), so it is correct
+    for whatever weapon is configured today (155mm M107) or later — nothing is
+    hardcoded. For a drag-limited shell the range peaks broadly in the mid-40s of
+    quadrant elevation (below the 45 deg vacuum optimum), so a coarse sweep then a
+    refinement near the peak pins it down cheaply. A slightly coarse dt keeps this
+    guard fast — it only needs the peak range, not a high-fidelity trajectory.
+
+    weapon_params: optional dict of integrate_trajectory kwargs (e.g. {"v0": 900}).
+        Extra **kw override it. met / target_height_m are applied to every probe.
+    Returns the max range in metres, or (max_range_m, optimal_elev_deg) when
+    return_elev is True.
+    """
+    params = dict(weapon_params) if weapon_params else {}
+    params.update(kw)
+    params.setdefault("v0", V0)
+    params.setdefault("use_g7", True)
+    # the sweep controls these — don't let a caller's dict collide with them
+    for owned in ("elevation_deg", "met", "target_height_m", "dt"):
+        params.pop(owned, None)
+
+    def reach(elev):
+        r = integrate_trajectory(elevation_deg=float(elev), met=met,
+                                 target_height_m=target_height_m, dt=dt, **params)
+        # an unreachable altitude (target above apex) returns range_m None
+        return r["range_m"] if r.get("range_m") is not None else -1.0
+
+    def sweep(lo, hi, step):
+        best_e, best_r = lo, -1.0
+        e = lo
+        while e <= hi + 1e-9:
+            r = reach(e)
+            if r > best_r:
+                best_r, best_e = r, e
+            e += step
+        return best_e, best_r
+
+    e1, _ = sweep(33.0, 60.0, 3.0)            # coarse: the peak sits in the mid-40s
+    e2, _ = sweep(e1 - 3.0, e1 + 3.0, 0.5)    # refine around the coarse peak
+    e3, r3 = sweep(e2 - 0.5, e2 + 0.5, 0.1)   # fine
+    return (float(r3), float(e3)) if return_elev else float(r3)
+
+
+# ===========================================================================
 # Database schema extension (added columns only — never a rewrite).
 # ===========================================================================
 def _ensure_phase2_columns(db):
@@ -420,6 +473,32 @@ def run_engagement_until_destroyed(weapon_id, target_range, target_bearing,
         if _rng is None:
             return true_miss
         return true_miss + _rng.normal(0.0, obs_noise, size=2)
+
+    # --- Honest reachability guard (Option A) -------------------------------
+    # Before firing a single round, check the target is actually within the
+    # projectile's maximum range (computed from its real parameters, NOT
+    # hardcoded). If not, refuse: return reachable=False with zero rounds and no
+    # claim of destruction. Computed once per mission. A reachable target is
+    # completely unaffected and proceeds exactly as before.
+    max_range_m = max_achievable_range({"v0": V0}, met=told_met,
+                                       target_height_m=target_height_m)
+    if target_range > max_range_m:
+        return {
+            "reachable": False,
+            "reason": (f"Target range {target_range:.0f} m exceeds weapon "
+                       f"maximum range {max_range_m:.0f} m"),
+            "max_range_m": float(max_range_m),
+            "target_range_m": float(target_range),
+            "weapon_id": weapon_id,
+            "destroyed": False,
+            "rounds_fired": 0,
+            "destroying_round": None,
+            "final_miss": None,
+            "lethal_radius_m": float(lethal_radius_m),
+            "max_rounds": max_rounds,
+            "warm_started": False,
+            "history": [],
+        }
 
     # Height-aware impact in the range/cross frame (None if unreachable).
     def imp(met, elev):

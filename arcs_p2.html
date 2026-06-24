@@ -51,6 +51,8 @@
   button.run:disabled{opacity:.5;cursor:default}
   button.run.alt{background:linear-gradient(180deg,#13314a,#0d2236);color:#bfe7ff;border-color:var(--line)}
   button.run.alt:hover{background:linear-gradient(180deg,#1a4262,#13314a);border-color:var(--cyan)}
+  button.run.alt.on{border-color:var(--green);color:var(--green);
+    background:linear-gradient(180deg,#0f2a22,#0b1d18)}
   .hint{color:var(--muted);font-size:11px}
 
   /* info (i) tooltip */
@@ -140,6 +142,7 @@
     <div class="runbar">
       <button class="run" id="runBtn">▶ RUN ENGAGEMENT</button>
       <button class="run alt" id="rndBtn">🎲 RANDOMIZE</button>
+      <button class="run alt" id="liveBtn" title="mirror the latest mission run in the 3D sim">📡 live from sim</button>
       <span class="hint" id="runHint">Tell the computer a wrong wind &amp; give the gun a hidden bias — watch it learn both from misses.</span>
     </div>
   </div>
@@ -472,8 +475,99 @@ function resetView(which){
   else resetSvg(which);
 }
 
+/* ===== Round 4: live link — mirror the latest mission run in the 3D sim =====
+   The backend remembers the most recent /api/p2/run_mission result; here we poll
+   /api/p2/last_mission and render that SAME mission through the existing views.
+   The sim's mission package has a different shape than this dashboard's own
+   /api/p2/engagement result, so packageToEng adapts it (all values are the real
+   stored mission — nothing is fabricated). Toggle off = standalone, unchanged. */
+const DEFAULT_HINT = $('runHint').textContent;
+let liveMode=false, liveTimer=null, liveSig=null;
+
+function packageToEng(pkg){
+  const m = pkg.mission, L = pkg.learned, R = m.target_range;
+  const ph = p => p === 'FIRE_FOR_EFFECT' ? 'FFE' : p;       // dashboard uses 'FFE'
+  const history = pkg.rounds.map(r=>({
+    round:r.round, phase:ph(r.phase),
+    miss:[r.impact.x - R, r.impact.y], radial:r.miss_m       // back to (downrange, cross) miss
+  }));
+  const phase_misses = {REGISTRATION:[], ADJUSTMENT:[], FFE:[]};
+  history.forEach(h=>{ (phase_misses[h.phase]=phase_misses[h.phase]||[]).push(h.radial); });
+  if(!phase_misses.REGISTRATION.length && history.length)     // warm start has no reg rounds
+    phase_misses.REGISTRATION = [history[0].radial];
+  const arc = pkg.rounds.length ? pkg.rounds[0].trajectory : [];
+  const traj = { points:arc,
+    range_m: arc.length ? arc[arc.length-1][0] : R,
+    apex_m: pkg.rounds.length ? pkg.rounds[0].apex_m : 0 };
+  const eng = {
+    final_cep: (m.final_miss_m!=null ? m.final_miss_m
+                : (history.length ? history[history.length-1].radial : 0)),
+    phase_misses,
+    rounds_to_converge: (m.destroying_round!=null ? m.destroying_round : m.rounds_fired),
+    total_shots: m.rounds_fired, warm_started: m.warm_started,
+    target_range: R, elevation_deg: m.elevation_deg, history,
+    gun_bias_est:L.gun_bias_est, gun_bias_true:L.gun_bias_true,
+    atmo_correction_est:L.atmo_correction_est, wind_true:L.atmo_correction_true
+  };
+  return {eng, traj};
+}
+function renderEngObj(eng, traj){
+  renderHeadline(eng);
+  if(traj && traj.points && traj.points.length) drawArc(traj, eng); else $('arc').innerHTML='';
+  drawBeaten(eng); drawConvergence(eng); fillLearned(eng);
+}
+function clearPanels(){
+  $('arc').innerHTML=''; $('beaten').innerHTML='';
+  if(convChart){ convChart.destroy(); convChart=null; }
+  $('lvtBody').innerHTML=''; $('shotsBody').innerHTML='';
+  $('convVal').textContent='—'; $('rtcVal').textContent='—';
+}
+function showNoMission(){
+  $('phaseBadge').textContent='LIVE — WAITING FOR SIM…';
+  $('cepVal').innerHTML='— <small>m</small>';
+  $('cepSub').textContent='no mission run yet — run one in the 3D sim (/p2/sim)';
+  clearPanels();
+}
+function showLiveUnreachable(pkg){
+  $('phaseBadge').textContent='LIVE — TARGET UNREACHABLE';
+  $('cepVal').innerHTML='✕';
+  $('cepSub').textContent='requested '+(pkg.target_range_m/1000).toFixed(1)+
+    ' km exceeds weapon max range (~'+(pkg.max_range_m/1000).toFixed(1)+' km) — no rounds fired';
+  clearPanels();
+}
+async function pollLast(){
+  let resp;
+  try{ const r=await fetch('/api/p2/last_mission'); if(!r.ok) throw 0; resp=await r.json(); }
+  catch(e){ setOffline(true); return; }
+  setOffline(false);
+  if(!resp.available){ if(liveSig!=='none'){ liveSig='none'; showNoMission(); } return; }
+  const pkg = resp.mission_package;
+  const sig = JSON.stringify(pkg.mission)+JSON.stringify(pkg.learned);
+  if(sig===liveSig) return;                       // unchanged -> no needless re-render
+  liveSig = sig;
+  if(pkg.reachable===false){ showLiveUnreachable(pkg); return; }
+  const {eng, traj} = packageToEng(pkg);
+  renderEngObj(eng, traj);
+  $('phaseBadge').textContent='LIVE FROM SIM ✓';
+}
+function setLive(on){
+  liveMode = on; liveSig = null;
+  $('liveBtn').classList.toggle('on', on);
+  $('liveBtn').textContent = on ? '📡 live: ON' : '📡 live from sim';
+  $('runBtn').disabled = on; $('rndBtn').disabled = on;
+  if(on){
+    $('runHint').textContent = 'Mirroring the latest mission run in the 3D sim (/p2/sim) — refreshes automatically.';
+    pollLast(); liveTimer = setInterval(pollLast, 1500);
+  } else {
+    if(liveTimer) clearInterval(liveTimer); liveTimer = null;
+    $('phaseBadge').textContent = 'PHASE — IDLE';
+    $('runHint').textContent = DEFAULT_HINT;
+  }
+}
+
 $('runBtn').addEventListener('click', runEngagement);
 $('rndBtn').addEventListener('click', randomize);
+$('liveBtn').addEventListener('click', ()=>setLive(!liveMode));
 document.querySelectorAll('[data-reset]').forEach(b=>
   b.addEventListener('click', ()=> resetView(b.dataset.reset)));
 setupSvgZoom('arc');
@@ -481,7 +575,35 @@ setupSvgZoom('beaten');
 checkBackend().then(()=>{
   if(location.search.includes('autorun')) runEngagement();
   if(location.search.includes('selftest')) selfTest();
+  if(location.search.includes('livetest')) liveTest();
+  if(location.search.includes('autolive')) setLive(true);   // dev: open straight into live mode
 });
+
+/* QA hook (inert unless ?livetest): run a mission through the backend, enable
+   live mode, and confirm the dashboard renders THAT mission (learned values +
+   round count match), then toggle off and confirm standalone restores. */
+async function liveTest(){
+  try{
+    const body={weapon_id:'HOW-LIVE',target_range:22000,target_bearing:0,
+      told_wind_dir:180,told_wind_speed:20,true_wind_dir:180,true_wind_speed:23,
+      gun_bias_dr:200,gun_bias_cr:80,lethal_radius_m:8,max_rounds:15,warm_start:false};
+    const run=await (await fetch('/api/p2/run_mission',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    setLive(true); await pollLast();
+    const estCell=$('lvtBody').querySelector('.est');
+    const shownGunDr=estCell?parseFloat(estCell.textContent):NaN;
+    const wantGunDr=run.learned.gun_bias_est[0];
+    const matchGun=Math.abs(shownGunDr-wantGunDr)<0.15;
+    const shots=$('shotsBody').querySelectorAll('tr').length;
+    const matchRounds=shots===run.mission.rounds_fired;
+    const liveBadge=$('phaseBadge').textContent.includes('LIVE FROM SIM');
+    setLive(false);
+    const restored=!$('runBtn').disabled && $('phaseBadge').textContent.includes('IDLE');
+    document.title='LIVETEST | liveBadge='+liveBadge+' matchGun='+matchGun
+      +' shownGunDr='+shownGunDr.toFixed(1)+' wantGunDr='+wantGunDr.toFixed(1)
+      +' matchRounds='+matchRounds+' shots='+shots+' restored='+restored;
+  }catch(e){ document.title='LIVETEST | ERR '+e.message; }
+}
 
 /* QA hook (inert unless ?selftest=1): drive zoom/pan/randomize/reset and
    report PASS/FAIL via the document title. Not used in normal operation. */

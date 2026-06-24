@@ -25,6 +25,7 @@ from physics.trajectory import integrate_trajectory
 from physics.met_message import MetMessage, wind_vector_from_dir_speed
 from physics.engagement import (run_engagement, run_engagement_until_destroyed,
                                 _save_gun_bias, _ensure_phase2_columns)
+from physics.horizontal_met import HorizontalMetField, weather_profile_along_path
 from engagement_database import EngagementDatabase
 
 app = Flask(__name__, static_folder=".")
@@ -330,6 +331,33 @@ def build_mission(d):
             db.close()
             os.remove(db_path)
 
+    # Honest reachability guard (Option A): an unreachable target fired zero
+    # rounds and was never "destroyed". Return a clean, distinct package the UI
+    # can show as UNREACHABLE — no arc, no impacts, no fabricated solution.
+    if not res.get("reachable", True):
+        return {
+            "reachable": False,
+            "reason": res["reason"],
+            "max_range_m": res["max_range_m"],
+            "target_range_m": res["target_range_m"],
+            "mission": {
+                "weapon_id": weapon_id,
+                "target_range": target_range,
+                "target_bearing": target_bearing,
+                "target_height_m": target_height_m,
+                "lethal_radius_m": lethal_radius_m,
+                "max_rounds": max_rounds,
+                "destroyed": False,
+                "destroying_round": None,
+                "rounds_fired": 0,
+                "warm_started": bool(warm_start),
+                "elevation_deg": None,
+                "final_miss_m": None,
+            },
+            "rounds": [],
+            "learned": None,
+        }
+
     elevation = float(res["elevation_deg"])
 
     # Real shell arc — fired at the firing elevation through the true atmosphere
@@ -394,14 +422,58 @@ def build_mission(d):
     }
 
 
+# In-memory "last mission" store (Round 4 sim->dashboard live link). The backend
+# remembers the most recently RUN mission package so the dashboard can fetch and
+# display the exact same mission the sim just ran — a single source of truth, no
+# brittle browser-to-browser messaging. It holds the already-computed result; it
+# changes no physics or mission computation.
+_LAST_MISSION = None
+
+
 @app.route("/api/p2/run_mission", methods=["POST"])
 def p2_run_mission():
     """One call -> the COMPLETE finished mission (rounds, trajectories, impacts,
-    learning, stop). The browser animates this; it computes no physics."""
+    learning, stop). The browser animates this; it computes no physics. The
+    result is also cached as the 'last mission' for the dashboard live link."""
+    global _LAST_MISSION
     try:
-        return jsonify(build_mission(request.get_json(force=True)))
+        package = build_mission(request.get_json(force=True))
+        _LAST_MISSION = package          # remember it for /api/p2/last_mission
+        return jsonify(package)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/p2/weather_profile", methods=["POST"])
+def p2_weather_profile():
+    """Read-only Component-12 weather-along-path data for honest visualization.
+    Builds a HorizontalMetField whose GUN profile is the told/measured wind and
+    whose TARGET profile is the true wind, then returns weather_profile_along_path:
+    the wind that varies from gun to target plus a confidence that decreases
+    toward the target (known near the gun, estimated downrange). This only reads
+    the existing physics function — it changes no mission computation."""
+    d = request.get_json(force=True)
+    target_range = float(d.get("target_range", 22000.0))
+    told_dir = float(d.get("told_wind_dir", 180.0))
+    told_spd = float(d.get("told_wind_speed", 20.0))
+    true_dir = float(d.get("true_wind_dir", 180.0))
+    true_spd = float(d.get("true_wind_speed", 23.0))
+    n_points = int(d.get("n_points", 16))
+    field = HorizontalMetField(_met_from_wind(told_dir, told_spd),     # measured at gun
+                               _met_from_wind(true_dir, true_spd),     # real toward target
+                               target_range)
+    profile = weather_profile_along_path(field, n_points=n_points)
+    return jsonify({"target_range_m": target_range,
+                    "n_points": len(profile), "profile": profile})
+
+
+@app.route("/api/p2/last_mission")
+def p2_last_mission():
+    """The most recently run mission (for the dashboard 'live from sim' mode), or
+    a clean no-mission state before anything has been run. Never fabricates data."""
+    if _LAST_MISSION is None:
+        return jsonify({"available": False})
+    return jsonify({"available": True, "mission_package": _LAST_MISSION})
 
 
 if __name__ == "__main__":

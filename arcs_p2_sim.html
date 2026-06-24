@@ -23,6 +23,12 @@
   h2,h3{margin:0;font-weight:600;letter-spacing:.05em}
   .ttl{font-size:11px;color:#bfe7ff;text-transform:uppercase;letter-spacing:.12em;
     margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:7px}
+  /* Round 3: movable + resizable boards. The title bar is the drag handle; the
+     panel itself is resizable from its bottom-right corner (native CSS resize). */
+  .panel.board{resize:both;overflow:auto;min-width:188px;min-height:110px}
+  .panel.board .ttl{cursor:move;user-select:none}
+  .panel.board .ttl::before{content:"⠿ ";color:var(--muted);letter-spacing:0}
+  .panel.dragging{opacity:.96;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 
   /* top bar */
   #top{top:12px;left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;
@@ -97,8 +103,31 @@
     text-shadow:0 0 24px rgba(0,255,148,.6);display:none;pointer-events:none}
   #banner.show{display:block;animation:pop .4s ease-out}
   @keyframes pop{from{transform:translate(-50%,-50%) scale(.7);opacity:0}to{transform:translate(-50%,-50%) scale(1);opacity:1}}
+  /* unreachable-target notice (honest reject — no destroyed claim, no arc) */
+  #ubanner{position:fixed;top:46%;left:50%;transform:translate(-50%,-50%);z-index:20;
+    text-align:center;display:none;pointer-events:none;border:1px solid var(--warn);
+    background:rgba(255,179,0,.10);border-radius:12px;padding:18px 28px;max-width:480px}
+  #ubanner.show{display:block;animation:pop .4s ease-out}
+  #ubanner b{color:var(--warn);font-size:21px;letter-spacing:.1em;display:block;margin-bottom:7px;
+    text-shadow:0 0 18px rgba(255,179,0,.5)}
+  #ubanner span{font-size:12px;color:#ffe1a3;line-height:1.6}
   .legend{display:flex;gap:12px;font-size:10px;color:var(--muted);margin-top:8px}
   .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}
+  /* Round 5: mission summary + shot comparison */
+  #summary{max-height:calc(100vh - 110px)}
+  .suminsight{background:rgba(0,255,148,.07);border:1px solid rgba(0,255,148,.3);border-radius:8px;
+    padding:9px 11px;color:#cffce6;font-size:11.5px;line-height:1.5;margin-bottom:11px}
+  .sumgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .sumcell{background:#0a1424;border:1px solid var(--border);border-radius:7px;padding:8px 10px}
+  .sumcell .sk{color:var(--muted);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase}
+  .sumcell .sv{color:var(--text);font-size:15px;font-weight:600;margin-top:3px}
+  .shottbl{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+  .shottbl th{color:var(--muted);font-weight:500;text-align:right;padding:3px 5px;border-bottom:1px solid var(--border)}
+  .shottbl th:nth-child(2){text-align:left}
+  .shottbl td{padding:3px 5px;text-align:right;border-bottom:1px solid rgba(0,225,255,.06);font-variant-numeric:tabular-nums}
+  .shottbl td:nth-child(2){text-align:left}
+  .ptag{font-size:9px;padding:1px 6px;border-radius:8px;border:1px solid currentColor}
+  .walkbar{display:inline-block;height:7px;border-radius:4px;vertical-align:middle;min-width:2px}
 </style>
 </head>
 <body>
@@ -106,6 +135,7 @@
 <canvas id="c2d"></canvas>
 
 <div id="banner">◎ TARGET DESTROYED</div>
+<div id="ubanner"></div>
 
 <!-- TOP BAR -->
 <div class="panel" id="top">
@@ -117,11 +147,12 @@
       <button data-view="3d" class="on">3D</button>
       <button data-view="2d">2D side-on</button>
     </div>
+    <button class="mini" id="resetLayout" title="reset board layout">⟲ layout</button>
   </div>
 </div>
 
 <!-- CONTROLS -->
-<div class="panel" id="ctrl">
+<div class="panel board" id="ctrl">
   <div class="ttl">Mission Parameters</div>
   <div class="row">
     <div class="fld"><label>Target range (m)</label><input id="target_range" type="number" value="22000" step="500"></div>
@@ -156,10 +187,12 @@
     <span><i style="background:var(--adj)"></i>adj</span>
     <span><i style="background:var(--ffe)"></i>ffe</span>
   </div>
+  <div style="color:var(--muted);font-size:10px;margin-top:8px;line-height:1.5">
+    ◦ click the ground to place the target<br>◦ left-drag orbit · right/shift-drag pan · wheel zoom-to-cursor</div>
 </div>
 
 <!-- TELEMETRY -->
-<div class="panel" id="tele">
+<div class="panel board" id="tele">
   <div class="ttl">Telemetry</div>
   <div class="stat"><span class="k">Round</span><span class="v" id="t-round">—</span></div>
   <div class="stat"><span class="k">Phase</span><span class="v" id="t-phase">—</span></div>
@@ -177,7 +210,29 @@
   <div class="outcome" id="outcome">run a mission</div>
 </div>
 
-<!-- BOTTOM: camera + vertical scale -->
+<!-- MISSION SUMMARY + SHOT COMPARISON (Round 5; shown on complete / via toggle) -->
+<div class="panel board" id="summary" style="display:none;left:50%;top:84px;width:430px;transform:translateX(-50%)">
+  <div class="ttl">Mission Summary <span id="sumClose" style="float:right;cursor:pointer;color:var(--muted)">✕</span></div>
+  <div id="sumInsight" class="suminsight">—</div>
+  <div class="sumgrid">
+    <div class="sumcell"><div class="sk">Outcome</div><div class="sv" id="sm-outcome">—</div></div>
+    <div class="sumcell"><div class="sk">Rounds to destroy</div><div class="sv" id="sm-rounds">—</div></div>
+    <div class="sumcell"><div class="sk">Opening miss → final</div><div class="sv" id="sm-conv">—</div></div>
+    <div class="sumcell"><div class="sk">Tighter by</div><div class="sv" id="sm-factor">—</div></div>
+  </div>
+  <div class="ttl" style="margin-top:12px">Learned from fall of shot alone</div>
+  <table class="lvt"><tbody>
+    <tr><td>Gun bias dr</td><td class="est" id="sm-gdr">—</td><td class="tru" id="sm-gdrt">—</td></tr>
+    <tr><td>Gun bias cr</td><td class="est" id="sm-gcr">—</td><td class="tru" id="sm-gcrt">—</td></tr>
+    <tr><td>Wind error dr</td><td class="est" id="sm-wdr">—</td><td class="tru" id="sm-wdrt">—</td></tr>
+    <tr><td>Wind error cr</td><td class="est" id="sm-wcr">—</td><td class="tru" id="sm-wcrt">—</td></tr>
+  </tbody></table>
+  <div class="ttl" style="margin-top:12px">Shot-by-shot · impacts walking in</div>
+  <table class="shottbl"><thead><tr><th>#</th><th>phase</th><th>dr</th><th>cr</th><th>miss</th><th></th></tr></thead>
+    <tbody id="sm-shots"></tbody></table>
+</div>
+
+<!-- BOTTOM: camera + vertical scale + viz layers -->
 <div class="panel" id="bottom">
   <div class="grp">
     <span style="color:var(--muted)">CAM</span>
@@ -185,6 +240,12 @@
     <button class="mini" data-cam="side">side</button>
     <button class="mini" data-cam="top">top</button>
     <button class="mini" data-cam="reset">⟲ reset</button>
+  </div>
+  <div class="grp">
+    <span style="color:var(--muted)">LAYERS</span>
+    <button class="mini on" id="tglAtmo" title="MET altitude zones the shell flies through (real)">atmosphere</button>
+    <button class="mini" id="tglWx" title="Component 12: real wind-along-path + uncertainty">weather</button>
+    <button class="mini" id="tglSum" title="end-of-mission summary + shot comparison">summary</button>
   </div>
   <div class="grp">
     <input type="range" id="vexag" min="1" max="8" step="0.5" value="3">
@@ -207,17 +268,66 @@ const $ = id => document.getElementById(id);
 const MET_ZONES = [0,200,500,1000,1500,2000,3000,4000,5000,6000,8000,10000,12000];
 const PHASE_HEX = {REGISTRATION:0xFF9F1C, ADJUSTMENT:0x00E1FF, FIRE_FOR_EFFECT:0x00FF94};
 const PHASE_CSS = {REGISTRATION:'#FF9F1C', ADJUSTMENT:'#00E1FF', FIRE_FOR_EFFECT:'#00FF94'};
-const WORLD = 0.012;            // scene units per metre (horizontal, true scale)
+const WORLD = 0.012;            // scene units per metre (horizontal, TRUE scale)
 let vexag = 3.0;                // vertical exaggeration (altitude only) — honest, labelled
 
-// ---- physics-frame metres -> scene base coords (vexag applied via group.scale.y) ----
-//   x downrange -> sceneX ,  z altitude -> sceneY ,  y cross -> sceneZ
-function mapBase(p){ return new THREE.Vector3(p[0]*WORLD, p[2]*WORLD, p[1]*WORLD); }
+// ================== ONE coordinate mapping for EVERYTHING ==================
+// Physics frame is range/cross/altitude (metres): downrange (along the firing
+// line), cross (lateral), altitude. The backend returns the arc and every
+// impact in THIS frame (azimuth 0). Scene base coords (vexag is applied on top
+// via worldGroup.scale.y):
+//     downrange -> sceneX ,  altitude -> sceneY ,  cross -> sceneZ
+// Gun, target, trajectories and impacts ALL go through mapPhys, so a point at a
+// given physical (downrange,cross,alt) always draws at the same scene position.
+function mapPhys(downrange, cross, alt){
+  return new THREE.Vector3(downrange*WORLD, alt*WORLD, cross*WORLD);
+}
+function mapBase(p){ return mapPhys(p[0], p[1], p[2]); }   // p = [downrange, cross, alt]
+
+// Round 2: the firing line can point along any bearing. mapAimed rotates the
+// range/cross frame by the current firing bearing in the ground (X-Z) plane, so
+// the gun -> target -> arc line points along the REAL bearing the backend used.
+// bearing 0 reduces exactly to mapPhys (+X downrange). The gun sits at the origin
+// (bearing-invariant pivot); everything downrange is drawn through mapAimed, and
+// click-to-place inverts it (range = ground distance, bearing = ground angle).
+let aimBearingDeg = 0;
+function mapAimed(downrange, cross, alt){
+  const f = aimBearingDeg * Math.PI/180, cf = Math.cos(f), sf = Math.sin(f);
+  return new THREE.Vector3((downrange*cf - cross*sf)*WORLD, alt*WORLD,
+                           (downrange*sf + cross*cf)*WORLD);
+}
+// Inverse: a scene ground point (x,z) back to physics range (m) and bearing (deg).
+function sceneGroundToPhysics(x, z){
+  const dr = x/WORLD, cr = z/WORLD;
+  return { range_m: Math.hypot(dr, cr), bearing_deg: (Math.atan2(cr, dr)*180/Math.PI + 360) % 360 };
+}
+
+// The backend sends ONE real arc shape per mission (its altitude/downrange
+// profile is physically real) plus each round's true impact point (which moves
+// toward the target as the loop learns). To make a round's arc actually MEET its
+// impact — and so a converged round's arc end on the target marker — we place
+// the real arc by downrange FRACTION between the gun (origin) and that round's
+// impact: fraction 0 -> gun, fraction 1 -> impact. Altitude is the real curve.
+// This keeps "starts at the gun, ends at the target" exact without inventing
+// any physics: the shape is the backend's, the landing point is the backend's.
+function remapRound(rd, p){
+  const tr = rd.trajectory, xEnd = tr[tr.length-1][0] || 1;
+  const f = xEnd > 1e-6 ? p[0]/xEnd : 0;           // downrange fraction 0..1
+  return mapAimed(f*rd.impact.x, f*rd.impact.y, p[2]);
+}
 
 // ===================== Three.js scene =====================
-let scene, camera, renderer, controls, worldGroup, battle, bands, missionGroup, shell;
+let scene, camera, renderer, controls, worldGroup, battle, bands, missionGroup, shell, scaleGroup;
 const counterScale = [];       // meshes whose Y must be un-stretched when vexag changes
-let mission = null, play = null;
+let mission = null, play = null, lastUnreachable = null;
+// Round 2: the tank's traversable turret + elevating barrel (for the aim
+// animation) and the in-progress aim tween.
+let tankTurret = null, tankBarrel = null, aim = null;
+// Round 3: fine distance rings around the target (true-scale; fade in on zoom).
+let targetMarkers = null, targetMarkerHeightM = 0;
+// Round 5: toggleable honest viz layers (all real data).
+let bandLabels = null, weatherGroup = null, altIndicator = null, altLabelM = 0;
+let showAtmo = true, showWx = false;
 
 function initScene(){
   const canvas = $('c3d');
@@ -230,8 +340,38 @@ function initScene(){
   camera = new THREE.PerspectiveCamera(52, innerWidth/innerHeight, 0.1, 6000);
   controls = new THREE.OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.dampingFactor = 0.09;
-  controls.screenSpacePanning = false;
-  controls.maxPolarAngle = Math.PI*0.495;   // don't go under the ground
+  controls.screenSpacePanning = false;       // pan along the ground (map-like)
+  controls.maxPolarAngle = Math.PI*0.495;    // never go under / flip past the ground
+  // Free movement: LEFT = orbit, RIGHT = pan, MIDDLE = dolly. Panning moves the
+  // orbit target (built into OrbitControls) so rotation then pivots around wherever
+  // the user moved to — they can circle any area, including the sides.
+  controls.enablePan = true;
+  controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  // SHIFT + left-drag also pans (a common convention for trackpad users): swap the
+  // left button to PAN while Shift is held (OrbitControls reads the mapping at the
+  // start of each drag).
+  addEventListener('keydown', e=>{ if(e.key==='Shift') controls.mouseButtons.LEFT = THREE.MOUSE.PAN; });
+  addEventListener('keyup',   e=>{ if(e.key==='Shift') controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE; });
+  // Cursor-focused zoom: r128 OrbitControls has no zoomToCursor, so handle the
+  // wheel ourselves — dolly toward the ground point UNDER THE CURSOR (and pull the
+  // orbit target toward it), so pointing at the target/impacts and scrolling zooms
+  // straight in there instead of toward the scene centre.
+  controls.enableZoom = false;
+  renderer.domElement.addEventListener('wheel', onWheelZoomToCursor, {passive:false});
+
+  // Click-to-place: a non-drag left click on the ground re-positions the target
+  // (updates the range/bearing inputs and fires there). A drag is an orbit, so we
+  // only place when the pointer barely moved. Shift/right are pan -> never place.
+  let _down = null;
+  renderer.domElement.addEventListener('pointerdown', e=>{
+    _down = (e.button===0 && !e.shiftKey) ? {x:e.clientX, y:e.clientY} : null; });
+  renderer.domElement.addEventListener('pointerup', e=>{
+    const d = _down; _down = null;
+    if(!d || e.button!==0 || viewMode!=='3d') return;
+    if(Math.hypot(e.clientX-d.x, e.clientY-d.y) > 5) return;   // it was a drag (orbit)
+    placeTargetFromClick(e);
+  });
 
   scene.add(new THREE.AmbientLight(0x90b0d0, 0.7));
   const dir = new THREE.DirectionalLight(0xbfe7ff, 0.8);
@@ -244,7 +384,9 @@ function initScene(){
 
   buildBattlefield(22000, 4000, 0, 8);          // sensible default before any mission
   resize();
-  addEventListener('resize', resize);
+  frame('persp');                                // frame the whole field from the start
+  addEventListener('resize', ()=>{ resize();
+    document.querySelectorAll('.panel.board.moved').forEach(clampBoardOnScreen); });
   animate();
 }
 
@@ -258,64 +400,319 @@ function clearGroup(g){ while(g.children.length) { const c=g.children.pop(); g.r
   if(c.geometry) c.geometry.dispose(); if(c.material) c.material.dispose(); } }
 
 // ----- battlefield: ground, grid, gun, target, lethal circle, atmosphere bands -----
-function buildBattlefield(range, apex, height, lethal){
-  clearGroup(battle); clearGroup(bands);
+function buildBattlefield(range, apex, height, lethal, showTarget=true){
+  clearGroup(battle); clearGroup(bands); clearTargetMarkers();
+  if(altIndicator){ scene.remove(altIndicator); clearGroup(altIndicator); altIndicator=null; }
   for(let i=counterScale.length-1;i>=0;i--) counterScale.splice(i,1);
+  tankTurret = tankBarrel = null;
 
   const span = Math.max(range*WORLD*1.35, 60);
-  // ground
+  const mid = mapAimed(range*0.5, 0, 0);          // centre the field under the firing line
+  const s = Math.max(span*0.02, 1.2);             // model size unit for tank/target
+  // ground + grid, centred on the firing line so any bearing stays on the field
   const gMat = new THREE.MeshBasicMaterial({color:0x081222, transparent:true, opacity:0.9});
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(span, span), gMat);
-  ground.rotation.x = -Math.PI/2; ground.position.set(span*0.42, 0, 0); battle.add(ground);
+  ground.rotation.x = -Math.PI/2; ground.position.set(mid.x, 0, mid.z); battle.add(ground);
   const grid = new THREE.GridHelper(span, 28, 0x16344e, 0x0e2236);
-  grid.position.set(span*0.42, 0.02, 0); battle.add(grid);
+  grid.position.set(mid.x, 0.02, mid.z); battle.add(grid);
 
-  // gun at origin (small cyan marker)
-  const gun = new THREE.Mesh(new THREE.ConeGeometry(span*0.006, span*0.02, 12),
-    new THREE.MeshStandardMaterial({color:0x00e1ff, emissive:0x004a5a}));
-  gun.position.set(0, span*0.01, 0); battle.add(gun); counterScale.push(gun);
+  // TANK / howitzer at the gun origin (Round 2) — hull + traversable turret +
+  // elevating barrel, all primitives. mapPhys(0,0,0) is the bearing-invariant
+  // origin. Pushed to counterScale so vexag never distorts the model.
+  const tank = buildTank(s);
+  const gunP = mapPhys(0,0,0); tank.position.set(gunP.x, 0, gunP.z);
+  battle.add(tank); counterScale.push(tank);
 
-  // target at (range, height) with its lethal-radius kill zone on the ground
-  const tgtY = height*WORLD;
-  const tgt = new THREE.Mesh(new THREE.SphereGeometry(span*0.008, 16, 16),
-    new THREE.MeshStandardMaterial({color:0xff2040, emissive:0x5a0010}));
-  tgt.position.set(range*WORLD, tgtY + span*0.008, 0); battle.add(tgt); counterScale.push(tgt);
+  // TARGET structure at the mapped target position (downrange=range, cross=0,
+  // altitude=height) via the SAME mapAimed the arc + impacts use, so a converged
+  // round's arc end lands on it. Skipped for an unreachable shot.
+  if(showTarget){
+    const tp = mapAimed(range, 0, height);
+    const tstruct = buildTargetStructure(s);
+    tstruct.position.set(tp.x, tp.y, tp.z);
+    tstruct.rotation.y = -aimBearingDeg*Math.PI/180;     // face squarely down the firing line
+    battle.add(tstruct); counterScale.push(tstruct);
+    // lethal-radius kill zone on the ground (REAL radius from the mission)
+    const lr = Math.max(lethal*WORLD, span*0.003);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(lr*0.92, lr, 48),
+      new THREE.MeshBasicMaterial({color:0xff2040, side:THREE.DoubleSide, transparent:true, opacity:0.9}));
+    ring.rotation.x = -Math.PI/2; ring.position.set(tp.x, tp.y+0.05, tp.z);
+    ring.name = 'lethalRing'; battle.add(ring);
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(lr, 48),
+      new THREE.MeshBasicMaterial({color:0xff2040, transparent:true, opacity:0.10, side:THREE.DoubleSide}));
+    disc.rotation.x = -Math.PI/2; disc.position.set(tp.x, tp.y+0.04, tp.z); battle.add(disc);
+    buildTargetMarkers(range, height, lethal);    // fine distance rings (fade in on zoom)
+    buildAltIndicator(range, height);             // altitude-difference (Component 8), real height
+  }
 
-  const lr = Math.max(lethal*WORLD, span*0.003);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(lr*0.92, lr, 48),
-    new THREE.MeshBasicMaterial({color:0xff2040, side:THREE.DoubleSide, transparent:true, opacity:0.9}));
-  ring.rotation.x = -Math.PI/2; ring.position.set(range*WORLD, tgtY+0.05, 0);
-  ring.name = 'lethalRing'; battle.add(ring);
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(lr, 48),
-    new THREE.MeshBasicMaterial({color:0xff2040, transparent:true, opacity:0.10, side:THREE.DoubleSide}));
-  disc.rotation.x = -Math.PI/2; disc.position.set(range*WORLD, tgtY+0.04, 0); battle.add(disc);
+  buildScaleBar(range);                  // labelled ground distance scale (0..range)
 
-  // atmospheric layers (translucent horizontal bands at standard MET zones)
+  // atmospheric layers — REAL MET altitude zones the integrator samples; the
+  // shell visibly passes through them. Toggleable; labelled with real altitudes.
   const ceiling = Math.max(apex*1.35, 2200);
-  MET_ZONES.filter(z=>z>0 && z<=ceiling).forEach((z,i)=>{
+  const zoneAlts = MET_ZONES.filter(z=>z>0 && z<=ceiling);
+  zoneAlts.forEach((z,i)=>{
     const m = new THREE.Mesh(new THREE.PlaneGeometry(span, span),
       new THREE.MeshBasicMaterial({color:0x00e1ff, transparent:true,
         opacity: i%2? 0.030:0.055, side:THREE.DoubleSide, depthWrite:false}));
-    m.rotation.x = -Math.PI/2; m.position.set(span*0.42, z*WORLD, 0); bands.add(m);
+    m.rotation.x = -Math.PI/2; m.position.set(mid.x, z*WORLD, mid.z); bands.add(m);
   });
+  buildBandLabels(zoneAlts, range);
+  bands.visible = showAtmo; if(bandLabels) bandLabels.visible = showAtmo;
   applyVexag();
+}
+
+// ----- altitude-difference indicator (Component 8): the target sits at its REAL
+// elevation, with a vertical reference line from the ground and a "+N m" label. --
+function buildAltIndicator(range, height){
+  if(altIndicator){ scene.remove(altIndicator); clearGroup(altIndicator); altIndicator = null; }
+  if(Math.abs(height) < 1e-6) return;
+  altIndicator = new THREE.Group(); scene.add(altIndicator);
+  const tp = mapAimed(range, 0, 0);                 // target X,Z (ground projection)
+  altLabelM = height;
+  const col = height >= 0 ? 0x00ff94 : 0xffb300;
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+    [new THREE.Vector3(tp.x, 0, tp.z), new THREE.Vector3(tp.x, height*WORLD*vexag, tp.z)]),
+    new THREE.LineBasicMaterial({color:col, transparent:true, opacity:0.8}));
+  altIndicator.add(line);
+  const lbl = makeLabel((height>=0?'target +':'target ')+Math.round(height)+' m',
+                        Math.max(range*WORLD*0.05, 4));
+  lbl.position.set(tp.x, height*WORLD*vexag + Math.max(range*WORLD*0.03,2), tp.z);
+  altIndicator.add(lbl);
+}
+
+// ----- altitude labels for the atmosphere zones (scene-level, no vexag distortion) -
+function buildBandLabels(zoneAlts, range){
+  if(bandLabels){ scene.remove(bandLabels); clearGroup(bandLabels); }
+  bandLabels = new THREE.Group(); scene.add(bandLabels);
+  bandLabels._items = [];
+  const off = -range*0.05;                           // just left of the gun, in metres
+  const lblW = Math.max(range*WORLD*0.03, 2.4);
+  zoneAlts.forEach(z=>{
+    const p = mapAimed(0, off, 0);
+    const spr = makeLabel((z>=1000?(z/1000)+' km':z+' m'), lblW);
+    spr.position.set(p.x, z*WORLD*vexag, p.z);
+    spr.material.opacity = 0.8;
+    bandLabels.add(spr); bandLabels._items.push({spr, altM:z});
+  });
+}
+
+// ----- low-poly tank / howitzer (primitives only) -----------------------------
+// Hull + tracks, a TRAVERSABLE turret (rotation.y), and an ELEVATING barrel group
+// (rotation.z). tankTurret / tankBarrel are stored so the aim animation can swing
+// them to the real bearing + firing elevation the backend computed.
+function buildTank(s){
+  const g = new THREE.Group();
+  const hullMat = new THREE.MeshStandardMaterial({color:0x1b2a3a, metalness:0.6, roughness:0.5, emissive:0x06121e});
+  const darkMat = new THREE.MeshStandardMaterial({color:0x0a151f, metalness:0.5, roughness:0.6});
+  const accent  = new THREE.MeshStandardMaterial({color:0x00e1ff, emissive:0x0077a0, metalness:0.3, roughness:0.35});
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(s*1.7, s*0.45, s*1.05), hullMat);
+  hull.position.y = s*0.42; g.add(hull);
+  const glacis = new THREE.Mesh(new THREE.BoxGeometry(s*0.5, s*0.4, s*1.0), hullMat);
+  glacis.position.set(s*0.95, s*0.34, 0); glacis.rotation.z = 0.5; g.add(glacis);
+  [-1,1].forEach(side=>{
+    const tr = new THREE.Mesh(new THREE.BoxGeometry(s*1.85, s*0.3, s*0.24), darkMat);
+    tr.position.set(0, s*0.16, side*s*0.52); g.add(tr);
+  });
+  // traversable turret
+  const turret = new THREE.Group(); turret.position.y = s*0.66;
+  turret.add(new THREE.Mesh(new THREE.BoxGeometry(s*0.95, s*0.34, s*0.72), hullMat));
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(s*0.5, s*0.12, s*0.42), accent);
+  cap.position.y = s*0.22; turret.add(cap);
+  // elevating barrel (pivot at the turret front)
+  const barrel = new THREE.Group(); barrel.position.set(s*0.42, s*0.02, 0);
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(s*0.07, s*0.08, s*1.3, 12), darkMat);
+  bar.rotation.z = -Math.PI/2; bar.position.x = s*0.65; barrel.add(bar);
+  const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(s*0.1, s*0.1, s*0.14, 12), accent);
+  muzzle.rotation.z = -Math.PI/2; muzzle.position.x = s*1.28; barrel.add(muzzle);
+  turret.add(barrel); g.add(turret);
+  tankTurret = turret; tankBarrel = barrel;
+  return g;
+}
+
+// ----- recognizable target structure (a small bunker + marker) ----------------
+function buildTargetStructure(s){
+  const g = new THREE.Group();
+  const wall = new THREE.MeshStandardMaterial({color:0x3a2230, metalness:0.3, roughness:0.7, emissive:0x180008});
+  const red  = new THREE.MeshStandardMaterial({color:0xff2040, emissive:0x5a0010, metalness:0.2, roughness:0.5});
+  const base = new THREE.Mesh(new THREE.BoxGeometry(s*1.2, s*0.5, s*1.2), wall);
+  base.position.y = s*0.25; g.add(base);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(s*0.72, s*0.4, s*0.72), wall);
+  top.position.y = s*0.7; g.add(top);
+  const slit = new THREE.Mesh(new THREE.BoxGeometry(s*1.22, s*0.08, s*0.42), red);
+  slit.position.y = s*0.44; g.add(slit);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(s*0.03, s*0.03, s*1.0, 8), red);
+  pole.position.y = s*1.2; g.add(pole);
+  const flag = new THREE.Mesh(new THREE.ConeGeometry(s*0.2, s*0.34, 4), red);
+  flag.position.y = s*1.72; g.add(flag);
+  return g;
 }
 
 function applyVexag(){
   worldGroup.scale.y = vexag;
   counterScale.forEach(m => m.scale.y = 1/vexag);   // keep spheres/cones round
   if(shell) shell.scale.y = 1/vexag;
+  // keep the scene-level distance rings at the target's exaggerated ground height
+  if(targetMarkers) targetMarkers.position.y = targetMarkerHeightM*WORLD*vexag;
+  // Round 5: scene-level atmosphere labels + altitude indicator track vexag too
+  if(bandLabels) bandLabels._items.forEach(it => it.spr.position.y = it.altM*WORLD*vexag);
+  if(altIndicator) buildAltIndicator(mission ? mission.mission.target_range : 22000, altLabelM);
+}
+
+// ----- labelled ground distance scale (like a map's scale bar) -----------------
+// A baseline along the downrange axis with ticks + text every 5 km, showing REAL
+// metres/km even though the scene is scaled by WORLD. Added straight to the scene
+// (NOT under worldGroup) so the vertical-scale slider never distorts the labels;
+// horizontal positions still use the true WORLD factor, so they line up exactly
+// with the gun (0) and target.
+function makeLabel(text, worldW){
+  const c = document.createElement('canvas'); c.width = 256; c.height = 96;
+  const x = c.getContext('2d');
+  // dark rounded pill so the label pops against the grid, like a map scale bar
+  x.fillStyle = 'rgba(4,12,26,0.78)';
+  const w=c.width, h=c.height, r=22;
+  x.beginPath();
+  x.moveTo(r,8); x.arcTo(w-8,8,w-8,h-8,r); x.arcTo(w-8,h-8,8,h-8,r);
+  x.arcTo(8,h-8,8,8,r); x.arcTo(8,8,w-8,8,r); x.fill();
+  x.strokeStyle='rgba(0,225,255,0.45)'; x.lineWidth=3; x.stroke();
+  x.font = 'bold 50px ui-monospace, monospace'; x.textAlign = 'center';
+  x.textBaseline = 'middle'; x.fillStyle = '#dff3ff';
+  x.fillText(text, w/2, h/2 + 3);
+  const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:false}));
+  spr.scale.set(worldW, worldW*0.375, 1);
+  return spr;
+}
+function buildScaleBar(range){
+  if(scaleGroup){ scene.remove(scaleGroup); clearGroup(scaleGroup); }
+  scaleGroup = new THREE.Group(); scene.add(scaleGroup);
+  const stepM = 5000;
+  const maxM  = Math.max(stepM, Math.ceil(range/stepM)*stepM);   // 0..>=range, 5km steps
+  // offsets in METRES so mapAimed places the bar along the (possibly bearing-
+  // rotated) firing line, a little to its left, with ticks reading real km.
+  const offM   = -range*0.06;
+  const tickHM = Math.max(range*0.014, 40);
+  const lblW   = Math.max(range*WORLD*0.04, 3.2);                 // sprite world size
+  const lineMat = new THREE.LineBasicMaterial({color:0x2f5e86});
+  const at = (d,c)=>{ const v = mapAimed(d, c, 0); v.y = 0.02; return v; };
+  // baseline
+  scaleGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+    [at(0, offM), at(maxM, offM)]), lineMat));
+  for(let m=0; m<=maxM+1; m+=stepM){
+    scaleGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      [at(m, offM), at(m, offM - tickHM)]), lineMat));
+    const spr = makeLabel(m===0 ? '0' : (m/1000)+' km', lblW);
+    const lp = mapAimed(m, offM - tickHM*1.7, 0); spr.position.set(lp.x, 0.05, lp.z);
+    scaleGroup.add(spr);
+  }
+}
+
+// ----- Round 3: fine distance rings around the target (progressive disclosure) -
+// True-scale concentric rings (real metres from target centre) so the user can
+// read exactly how far each impact landed. They live in a scene-level group (no
+// vertical-exaggeration distortion) and fade IN only when the camera is zoomed
+// close to the target, fading OUT when zoomed wide so they never clutter.
+const TARGET_RING_RADII_M = [10, 25, 50, 100, 200];
+function clearTargetMarkers(){
+  if(targetMarkers){ scene.remove(targetMarkers); clearGroup(targetMarkers); targetMarkers = null; }
+}
+function buildTargetMarkers(range, height, lethal){
+  clearTargetMarkers();
+  targetMarkers = new THREE.Group(); scene.add(targetMarkers);
+  targetMarkers._mats = []; targetMarkers._sprs = [];
+  targetMarkerHeightM = height;
+  const tp = mapAimed(range, 0, 0);                       // target X,Z on the ground
+  targetMarkers.position.set(tp.x, height*WORLD*vexag, tp.z);
+  const lblW = Math.max(range*WORLD*0.0065, 0.55);
+  TARGET_RING_RADII_M.forEach((rm,i)=>{
+    const rr = rm*WORLD;                                  // TRUE scale (honest)
+    const mat = new THREE.MeshBasicMaterial({color:0x7fe0ff, transparent:true, opacity:0,
+      side:THREE.DoubleSide, depthWrite:false});
+    const ring = new THREE.Mesh(new THREE.RingGeometry(rr*0.992, rr*1.012, 80), mat);
+    ring.rotation.x = -Math.PI/2; ring.position.y = 0.06;
+    targetMarkers.add(ring); targetMarkers._mats.push(mat);
+    // fan the labels to different angles around the rings so they never overlap
+    const a = (-55 + i*27.5) * Math.PI/180;
+    const spr = makeLabel(rm+' m', lblW);                 // real distance from centre
+    spr.position.set(rr*Math.cos(a), 0.12, rr*Math.sin(a)); spr.material.opacity = 0;
+    targetMarkers.add(spr); targetMarkers._sprs.push(spr);
+  });
+}
+// Fade the rings by how close the camera is to the target (zoom proxy).
+function updateTargetMarkers(){
+  if(!targetMarkers) return;
+  const range = mission ? mission.mission.target_range : 22000;
+  const dShow = range*WORLD*0.12, dHide = range*WORLD*0.34;
+  const d = camera.position.distanceTo(targetMarkers.position);
+  const k = Math.max(0, Math.min(1, (dHide - d)/(dHide - dShow)));   // 1 close, 0 far
+  targetMarkers._mats.forEach(m => m.opacity = 0.65*k);
+  targetMarkers._sprs.forEach(s => s.material.opacity = 0.95*k);
+  targetMarkers.visible = k > 0.001;
+}
+
+// ===================== cursor-focused zoom =====================
+// Dolly toward the ground point under the cursor (and pull the orbit pivot toward
+// it), so the user can point at the target / impact area and zoom straight in.
+const _groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);  // world ground y=0
+const _ray = new THREE.Raycaster();
+const _hit = new THREE.Vector3();
+function groundUnderCursor(ev){
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((ev.clientX-rect.left)/rect.width)*2-1,
+    -((ev.clientY-rect.top)/rect.height)*2+1);
+  _ray.setFromCamera(ndc, camera);
+  return _ray.ray.intersectPlane(_groundPlane, _hit) ? _hit.clone() : null;
+}
+// Click-to-place: raycast the click to the ground, invert the mapping to physics
+// range + bearing, update the inputs, and fire there. Reachability is enforced by
+// the backend guard (an out-of-range placement shows the existing UNREACHABLE
+// state) — the browser invents nothing.
+function placeTargetFromClick(ev){
+  const p = groundUnderCursor(ev);
+  if(!p) return;
+  const phys = sceneGroundToPhysics(p.x, p.z);
+  if(phys.range_m < 500) return;                 // ignore clicks basically on the gun
+  $('target_range').value = Math.round(phys.range_m/100)*100;
+  $('target_bearing').value = Math.round(phys.bearing_deg);
+  runMission();                                  // engage the placed target (honest guard applies)
+}
+
+function onWheelZoomToCursor(ev){
+  ev.preventDefault();
+  const pivot = groundUnderCursor(ev) || controls.target.clone();  // cursor point, or fall back to centre
+  const s = Math.exp(ev.deltaY * 0.0012);     // deltaY<0 (scroll up) -> s<1 zoom IN; >0 zoom OUT
+  // scale camera and target toward the pivot: keeps the cursor point ~fixed while
+  // the orbit pivot drifts to where we're zooming, so later orbit circles it.
+  camera.position.lerpVectors(pivot, camera.position, s);
+  controls.target.lerpVectors(pivot, controls.target, s);
+  // clamp the eye->target distance to sensible limits (inspect impacts ... whole field)
+  const dir = camera.position.clone().sub(controls.target);
+  const d = Math.min(Math.max(dir.length(), controls.minDistance), controls.maxDistance);
+  camera.position.copy(controls.target).add(dir.setLength(d));
+  controls.update();
 }
 
 // ===================== camera framing =====================
 function frame(view){
   const range = mission ? mission.mission.target_range : 22000;
   const apex  = mission ? (mission.rounds[0]?.apex_m||4000) : 4000;
-  const cx = range*WORLD*0.5, cy = apex*WORLD*vexag*0.45, R = range*WORLD;
-  controls.target.set(cx, cy, 0);
-  if(view==='top')        camera.position.set(cx, R*0.95, 0.001);
-  else if(view==='side')  camera.position.set(cx, cy+R*0.18, R*0.92);
-  else                    camera.position.set(-R*0.18, cy+R*0.40, R*0.78); // perspective
+  const R = range*WORLD, cy = apex*WORLD*vexag*0.45;
+  // bearing-aware framing: centre on the firing-line midpoint and offset along
+  // the line's own forward/side axes, so any bearing is framed the same way.
+  const f = aimBearingDeg*Math.PI/180;
+  const dir = new THREE.Vector3(Math.cos(f), 0, Math.sin(f));   // downrange (ground)
+  const perp = new THREE.Vector3(-Math.sin(f), 0, Math.cos(f)); // cross (ground)
+  const mid = mapAimed(range*0.5, 0, 0);
+  controls.minDistance = Math.max(R*0.002, 0.3);                // tight enough to inspect impacts
+  controls.maxDistance = R*3.5 + 50;                            // ... see the whole field
+  controls.target.set(mid.x, cy, mid.z);
+  const pos = mid.clone();
+  if(view==='top'){          pos.set(mid.x, R*0.95, mid.z + 0.001); }
+  else if(view==='side'){    pos.addScaledVector(perp, R*0.92); pos.y = cy + R*0.18; }
+  else {                     pos.addScaledVector(dir, -R*0.68).addScaledVector(perp, R*0.78);
+                             pos.y = cy + R*0.40; }              // perspective
+  camera.position.copy(pos);
   camera.updateProjectionMatrix(); controls.update();
 }
 
@@ -333,14 +730,25 @@ async function runMission(){
   }catch(e){ showOffline(true); $('runBtn').disabled=false; setMissionState('','no mission'); return; }
   showOffline(false);
 
-  mission = data;
-  // precompute scene-space polylines (base coords; vexag applied by the group)
-  mission.rounds.forEach(rd => { rd.scenePts = rd.trajectory.map(mapBase); });
+  // Honest unreachable-target guard: the backend fired zero rounds and never
+  // claimed destruction. Show it plainly — no arc, no impact, no "destroyed".
+  if(data.reachable === false){ showUnreachable(data); $('runBtn').disabled=false; return; }
+  $('ubanner').classList.remove('show'); lastUnreachable = null;   // clear any prior notice
+
+  mission = data; aim = null;
+  // the firing bearing the backend used — drives the scene rotation (mapAimed)
+  // AND the turret traverse, so what's drawn matches the real azimuth.
+  aimBearingDeg = mission.mission.target_bearing || 0;
+  // precompute scene-space polylines: each round's real arc placed to START at
+  // the gun and END at that round's impact (converged rounds end on the target).
+  mission.rounds.forEach(rd => { rd.scenePts = rd.trajectory.map(p => remapRound(rd, p)); });
   buildBattlefield(mission.mission.target_range,
                    mission.rounds[0].apex_m,
                    mission.mission.target_height_m,
                    mission.mission.lethal_radius_m);
   clearGroup(missionGroup); $('banner').classList.remove('show');
+  $('summary').style.display='none';            // summary reappears when this mission completes
+  if(showWx) toggleWeather(true);               // refresh the weather overlay for the new scenario
 
   // shell marker
   shell = new THREE.Mesh(new THREE.SphereGeometry(mission.mission.target_range*WORLD*0.006, 14, 14),
@@ -349,11 +757,75 @@ async function runMission(){
 
   fillLearned(mission.learned);
   frame('persp');
+  play = null;                       // playback is gated until the turret finishes aiming
+  $('runBtn').disabled = false;
+  if(viewMode==='2d'){ draw2D(); startPlayback(); return; }
+  // Cinematic aim: the turret traverses to the REAL bearing and the barrel
+  // elevates to the REAL firing solution, THEN the shell flies. Pure visual —
+  // it never alters the backend playback that follows.
+  setMissionState('run','AIMING…');
+  $('outcome').className='outcome'; $('outcome').textContent='traversing turret to target…';
+  startAim(mission.mission.target_bearing, mission.mission.elevation_deg, startPlayback);
+}
+
+function startPlayback(){
   play = {idx:0, t:0, last:performance.now(), pause:0, done:false};
   setMissionState('run','IN PROGRESS');
   $('outcome').className='outcome'; $('outcome').textContent='mission in progress…';
-  $('runBtn').disabled = false;
+}
+
+// ----- turret-aim animation (visual only, on the REAL bearing + elevation) -----
+function startAim(bearingDeg, elevDeg, onDone){
+  if(!tankTurret || !tankBarrel){ if(onDone) onDone(); return; }
+  aim = { t:0, dur:850, last:performance.now(),
+          fromYaw: tankTurret.rotation.y, toYaw: -(bearingDeg||0)*Math.PI/180,
+          fromPitch: tankBarrel.rotation.z, toPitch: Math.max(0,(elevDeg||0))*Math.PI/180,
+          onDone };
+}
+function stepAim(now){
+  if(!aim) return;
+  const dt = now - aim.last; aim.last = now;
+  aim.t = Math.min(1, aim.t + dt/aim.dur);
+  const e = aim.t<0.5 ? 2*aim.t*aim.t : 1-Math.pow(-2*aim.t+2,2)/2;   // easeInOutQuad
+  tankTurret.rotation.y = aim.fromYaw + (aim.toYaw-aim.fromYaw)*e;
+  tankBarrel.rotation.z = aim.fromPitch + (aim.toPitch-aim.fromPitch)*e;
+  if(aim.t>=1){ const cb=aim.onDone; aim=null; if(cb) cb(); }
+}
+function finishAim(){   // snap to the aimed pose (used by the deterministic self-test)
+  if(!aim) return;
+  if(tankTurret) tankTurret.rotation.y = aim.toYaw;
+  if(tankBarrel) tankBarrel.rotation.z = aim.toPitch;
+  const cb = aim.onDone; aim = null; if(cb) cb();
+}
+
+// Honest reject of a target beyond the weapon's maximum range. No trajectory,
+// no impact, no destroyed claim — just a clear notice with the requested range
+// and the computed max range. The battlefield is reframed to the weapon's max
+// range so the user sees how far it CAN reach; no target is drawn at the
+// impossible distance.
+function showUnreachable(data){
+  mission = null; play = null; aim = null; lastUnreachable = data;
+  aimBearingDeg = +$('target_bearing').value || 0;   // orient the field to the attempted bearing
+  clearGroup(missionGroup); if(shell) shell.visible = false;
+  $('banner').classList.remove('show');
+  // frame to the weapon's reachable max, with NO target marker (the real target
+  // is unreachable, so we don't draw it anywhere)
+  buildBattlefield(data.max_range_m, 4000, 0, 8, false);
+  frame('persp');
+  ['t-round','t-phase','t-alt','t-apex','t-miss'].forEach(id => $(id).textContent = '—');
+  fillLearnedBlank();
+  setMissionState('off','UNREACHABLE');
+  const reqKm = (data.target_range_m/1000).toFixed(1), maxKm = (data.max_range_m/1000).toFixed(1);
+  $('outcome').className = 'outcome fail';
+  $('outcome').innerHTML = '✕ TARGET UNREACHABLE — no rounds fired';
+  $('ubanner').innerHTML = '<b>✕ TARGET UNREACHABLE</b><span>requested '+reqKm+
+    ' km exceeds the weapon’s maximum range (~'+maxKm+' km).<br>'+
+    'No solution fired — the projectile cannot reach this target.</span>';
+  $('ubanner').classList.add('show');
   if(viewMode==='2d') draw2D();
+}
+function fillLearnedBlank(){
+  ['l-gdr','l-gcr','l-wdr','l-wcr','l-gdrt','l-gcrt','l-wdrt','l-wcrt'].forEach(id=>$(id).textContent='—');
 }
 
 const ROUND_MS = 1500, PAUSE_MS = 420;
@@ -392,12 +864,14 @@ function drawArc(rd){
   missionGroup.add(line);
 }
 function dropImpact(rd){
-  const range = mission.mission.target_range, tgtY = mission.mission.target_height_m*WORLD;
   const r = Math.max(mission.mission.target_range*WORLD*0.004, 0.3);
   const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 20),
     new THREE.MeshBasicMaterial({color:PHASE_HEX[rd.phase], side:THREE.DoubleSide}));
   disc.rotation.x = -Math.PI/2;
-  disc.position.set(rd.impact.x*WORLD, tgtY+0.06, rd.impact.y*WORLD);
+  // impact at physical (downrange=impact.x, cross=impact.y, alt=target height) —
+  // the SAME mapAimed the arc end uses, so impact and arc end coincide.
+  const p = mapAimed(rd.impact.x, rd.impact.y, mission.mission.target_height_m);
+  disc.position.set(p.x, p.y+0.06, p.z);
   missionGroup.add(disc);
 }
 function onDestroyed(rd){
@@ -408,6 +882,7 @@ function onDestroyed(rd){
   $('outcome').className='outcome kill';
   $('outcome').textContent = '◎ TARGET DESTROYED — round '+rd.round+' (end of mission)';
   setMissionState('ok','COMPLETE');
+  fillSummary(); openSummary();
 }
 function onMissionEnd(){
   shell.visible=false; play.done=true;
@@ -417,6 +892,95 @@ function onMissionEnd(){
   else { $('outcome').className='outcome fail';
     $('outcome').textContent='✕ not destroyed within '+m.max_rounds+' rounds (safety cap)'; }
   setMissionState('ok','COMPLETE');
+  fillSummary(); openSummary();
+}
+
+// ===================== Round 5: mission summary + shot comparison =============
+function shortPhase(p){ return p==='FIRE_FOR_EFFECT'?'FFE':p==='REGISTRATION'?'REG':p==='ADJUSTMENT'?'ADJ':p; }
+function openSummary(){ if(mission) $('summary').style.display='block'; }
+function fillSummary(){
+  if(!mission) return;
+  const m=mission.mission, L=mission.learned, R=m.target_range, rounds=mission.rounds;
+  const open = rounds.length ? rounds[0].miss_m : 0;
+  const fin  = (m.final_miss_m!=null) ? m.final_miss_m : (rounds.length?rounds[rounds.length-1].miss_m:0);
+  const gb = Math.hypot(L.gun_bias_est[0], L.gun_bias_est[1]);
+  const we = Math.hypot(L.atmo_correction_est[0], L.atmo_correction_est[1]);
+  $('sm-outcome').innerHTML = m.destroyed
+    ? '<span style="color:var(--hit)">◎ destroyed</span>'
+    : '<span style="color:var(--warn)">✕ safety cap</span>';
+  $('sm-rounds').textContent = m.destroyed ? (m.destroying_round+' of '+m.rounds_fired)
+                                           : (m.rounds_fired+' (cap '+m.max_rounds+')');
+  $('sm-conv').innerHTML = Math.round(open)+' m → <b style="color:var(--hit)">'+fin.toFixed(1)+' m</b>';
+  $('sm-factor').textContent = (fin>0 ? (open/fin).toFixed(0)+'× tighter' : '—');
+  $('sm-gdr').textContent=L.gun_bias_est[0].toFixed(1);   $('sm-gdrt').textContent=L.gun_bias_true[0].toFixed(0);
+  $('sm-gcr').textContent=L.gun_bias_est[1].toFixed(1);   $('sm-gcrt').textContent=L.gun_bias_true[1].toFixed(0);
+  $('sm-wdr').textContent=L.atmo_correction_est[0].toFixed(2); $('sm-wdrt').textContent=L.atmo_correction_true[0].toFixed(2);
+  $('sm-wcr').textContent=L.atmo_correction_est[1].toFixed(2); $('sm-wcrt').textContent=L.atmo_correction_true[1].toFixed(2);
+  $('sumInsight').textContent = (m.destroyed
+      ? 'Destroyed in '+m.destroying_round+' round'+(m.destroying_round===1?'':'s')
+      : 'Not destroyed within '+m.max_rounds+' rounds')
+    + ' — learned a '+gb.toFixed(0)+' m gun bias and '+we.toFixed(1)
+    + ' m/s wind error from fall of shot alone.';
+  // shot-by-shot: impacts walking in toward the target across the phases
+  const maxMiss = Math.max(1, ...rounds.map(r=>r.miss_m));
+  $('sm-shots').innerHTML = rounds.map(r=>{
+    const dr=r.impact.x - R, cr=r.impact.y, col=PHASE_CSS[r.phase];
+    const w = Math.max(2, Math.round((r.miss_m/maxMiss)*110));
+    const kill = r.destroyed_target ? ' ◎' : '';
+    return '<tr><td>'+r.round+'</td><td><span class="ptag" style="color:'+col+'">'+shortPhase(r.phase)+'</span></td>'
+      +'<td>'+dr.toFixed(0)+'</td><td>'+cr.toFixed(0)+'</td><td>'+r.miss_m.toFixed(1)+kill+'</td>'
+      +'<td style="text-align:left"><span class="walkbar" style="width:'+w+'px;background:'+col+'"></span></td></tr>';
+  }).join('');
+}
+
+// ===================== Round 5: weather-along-path overlay (Component 12) =======
+async function toggleWeather(on){
+  showWx = on; $('tglWx').classList.toggle('on', on);
+  if(weatherGroup){ scene.remove(weatherGroup); clearGroup(weatherGroup); weatherGroup=null; }
+  if(!on) return;
+  const range = mission ? mission.mission.target_range : (+$('target_range').value||22000);
+  const body = { target_range:range,
+    told_wind_dir:+$('told_wind_dir').value, told_wind_speed:+$('told_wind_speed').value,
+    true_wind_dir:+$('true_wind_dir').value, true_wind_speed:+$('true_wind_speed').value, n_points:14 };
+  let prof;
+  try{ const r=await fetch('/api/p2/weather_profile',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+       if(!r.ok) throw 0; prof=(await r.json()).profile; }
+  catch(e){ showOffline(true); return; }
+  showOffline(false); drawWeather(prof, range);
+}
+function drawWeather(profile, range){
+  weatherGroup = new THREE.Group(); weatherGroup.position.y = 0.25; scene.add(weatherGroup);
+  const maxSpeed = Math.max(1, ...profile.map(p=>p.wind_speed_ms));
+  const arrowMax = range*WORLD*0.05, maxHW = range*0.06;
+  // confidence band: a translucent ribbon, tight at the gun, widening toward the
+  // target — REAL (1 - confidence) from weather_profile_along_path.
+  const verts=[], idx=[];
+  profile.forEach((p,i)=>{
+    const hw=(1-p.confidence)*maxHW;
+    const Lp=mapAimed(p.downrange_m, hw, 0), Rp=mapAimed(p.downrange_m, -hw, 0);
+    verts.push(Lp.x,0,Lp.z, Rp.x,0,Rp.z);
+    if(i>0){ const a=(i-1)*2; idx.push(a,a+1,a+2, a+1,a+3,a+2); }
+  });
+  const bg=new THREE.BufferGeometry();
+  bg.setAttribute('position', new THREE.Float32BufferAttribute(verts,3)); bg.setIndex(idx);
+  weatherGroup.add(new THREE.Mesh(bg, new THREE.MeshBasicMaterial({color:0x00e1ff,
+    transparent:true, opacity:0.12, side:THREE.DoubleSide, depthWrite:false})));
+  // wind arrows along the path (length ∝ real wind speed, colour by uncertainty)
+  const f=aimBearingDeg*Math.PI/180, cf=Math.cos(f), sf=Math.sin(f);
+  profile.forEach(p=>{
+    const a=p.wind_dir_deg*Math.PI/180;
+    let bx=-Math.cos(a), bz=Math.sin(a);                 // blow dir in (downrange, cross)
+    const dir=new THREE.Vector3(bx*cf-bz*sf, 0, bx*sf+bz*cf);
+    if(dir.lengthSq()<1e-9) return; dir.normalize();
+    const len=arrowMax*(p.wind_speed_ms/maxSpeed); if(len<1e-3) return;
+    const o=mapAimed(p.downrange_m,0,0); o.y=0;
+    const col=new THREE.Color().lerpColors(new THREE.Color(0x36f08a), new THREE.Color(0xff9f1c), 1-p.confidence);
+    weatherGroup.add(new THREE.ArrowHelper(dir, o, len, col.getHex(), len*0.32, len*0.2));
+  });
+  const lblW=Math.max(range*WORLD*0.038,3);
+  const g=mapAimed(range*0.05, -maxHW*1.4, 0); const gl=makeLabel('wind: known', lblW); gl.position.set(g.x,0.4,g.z); weatherGroup.add(gl);
+  const t=mapAimed(range*0.95, -maxHW*1.4, 0); const tl=makeLabel('estimated', lblW); tl.position.set(t.x,0.4,t.z); weatherGroup.add(tl);
 }
 
 // ===================== telemetry helpers =====================
@@ -474,8 +1038,17 @@ function setView(v){
 function draw2D(){
   const cv=$('c2d'); cv.width=innerWidth; cv.height=innerHeight;
   const g=cv.getContext('2d'); g.clearRect(0,0,cv.width,cv.height);
-  if(!mission){ g.fillStyle='#6f8bb0'; g.font='14px monospace';
-    g.fillText('No mission — run one to see the 2D side-on view.', 40, 80); return; }
+  if(!mission){
+    if(lastUnreachable){
+      const reqKm=(lastUnreachable.target_range_m/1000).toFixed(1), maxKm=(lastUnreachable.max_range_m/1000).toFixed(1);
+      g.fillStyle='#FFB300'; g.font='bold 16px monospace';
+      g.fillText('✕ TARGET UNREACHABLE — no rounds fired', 40, 70);
+      g.fillStyle='#ffe1a3'; g.font='12px monospace';
+      g.fillText('requested '+reqKm+' km exceeds the weapon’s maximum range (~'+maxKm+' km).', 40, 94);
+    } else { g.fillStyle='#6f8bb0'; g.font='14px monospace';
+      g.fillText('No mission — run one to see the 2D side-on view.', 40, 80); }
+    return;
+  }
   const m=mission.mission, rounds=mission.rounds;
   const range=m.target_range, apex=rounds[0].apex_m;
   // ---- side-on panel (top 58%) ----
@@ -494,7 +1067,11 @@ function draw2D(){
   rounds.forEach(rd=>{
     g.strokeStyle=PHASE_CSS[rd.phase]; g.globalAlpha=rd.destroyed_target?1:0.85;
     g.lineWidth=rd.destroyed_target?2.4:1.4; g.beginPath();
-    rd.trajectory.forEach((p,k)=>{ const x=X(p[0]),y=Y(p[2]); k?g.lineTo(x,y):g.moveTo(x,y); });
+    // place the real arc by downrange fraction so it ends at this round's impact
+    // (converged rounds end on the target) — matches the 3D mapping.
+    const xEnd=rd.trajectory[rd.trajectory.length-1][0]||1;
+    rd.trajectory.forEach((p,k)=>{ const f=p[0]/xEnd; const x=X(f*rd.impact.x),y=Y(p[2]);
+      k?g.lineTo(x,y):g.moveTo(x,y); });
     g.stroke(); g.globalAlpha=1;
   });
   // gun + target
@@ -526,7 +1103,9 @@ function draw2D(){
 // ===================== loop / wiring =====================
 let manualDrive = false;   // selftest drives stepMission deterministically
 function animate(){ requestAnimationFrame(animate); controls.update();
-  if(!manualDrive) stepMission(performance.now()); renderer.render(scene,camera); }
+  if(!manualDrive){ stepAim(performance.now()); stepMission(performance.now()); }
+  updateTargetMarkers();                 // fade fine distance rings by zoom level
+  renderer.render(scene,camera); }
 
 $('runBtn').addEventListener('click', runMission);
 $('rndBtn').addEventListener('click', randomize);
@@ -534,6 +1113,67 @@ $('vexag').addEventListener('input', e=>{ vexag=+e.target.value;
   $('vexLabel').textContent='Vertical scale: '+vexag+'× (for clarity)'; applyVexag(); });
 document.querySelectorAll('#viewSeg button').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
 document.querySelectorAll('[data-cam]').forEach(b=>b.addEventListener('click',()=>frame(b.dataset.cam==='reset'?'persp':b.dataset.cam)));
+
+// Round 5 viz-layer toggles (all real data; off/subtle so the view stays clean)
+$('tglAtmo').addEventListener('click', ()=>{ showAtmo=!showAtmo;
+  $('tglAtmo').classList.toggle('on', showAtmo);
+  if(bands) bands.visible=showAtmo; if(bandLabels) bandLabels.visible=showAtmo; });
+$('tglWx').addEventListener('click', ()=> toggleWeather(!showWx));
+$('tglSum').addEventListener('click', ()=>{
+  const vis = $('summary').style.display!=='none' && $('summary').style.display!=='';
+  if(vis){ $('summary').style.display='none'; }
+  else if(mission){ fillSummary(); $('summary').style.display='block'; }
+});
+$('sumClose').addEventListener('click', ()=> $('summary').style.display='none');
+makeBoardDraggable('summary');
+
+// ===================== Round 3: movable / resizable boards =====================
+// HTML overlays only — dragging the title bar repositions a panel, the native
+// corner grip (CSS resize) resizes it; both are kept fully on-screen and a
+// "reset layout" control restores defaults. These are above the canvas, so they
+// never interfere with orbit/pan/zoom on the 3D canvas.
+const BOARD_DEFAULTS = {
+  ctrl: { left:'12px',  top:'70px', right:'auto', width:'235px', height:'' },
+  tele: { left:'auto',  top:'70px', right:'12px', width:'248px', height:'' }
+};
+function resetBoards(){
+  for(const id in BOARD_DEFAULTS){ const d=BOARD_DEFAULTS[id], el=$(id);
+    el.style.left=d.left; el.style.top=d.top; el.style.right=d.right;
+    el.style.width=d.width; el.style.height=d.height; el.classList.remove('moved'); }
+}
+function clampBoardOnScreen(el){
+  const r=el.getBoundingClientRect();
+  let left=r.left, top=r.top;
+  left=Math.max(8-r.width+90, Math.min(left, innerWidth-90));   // keep >=90px on-screen horizontally
+  top =Math.max(8,            Math.min(top,  innerHeight-44));   // keep the title bar reachable
+  el.style.left=left+'px'; el.style.top=top+'px'; el.style.right='auto';
+}
+function makeBoardDraggable(id){
+  const el=$(id), handle=el.querySelector('.ttl'); if(!handle) return;
+  let drag=null;
+  handle.addEventListener('pointerdown', e=>{
+    if(e.button!==0) return;
+    const r=el.getBoundingClientRect();
+    el.style.left=r.left+'px'; el.style.top=r.top+'px'; el.style.right='auto';  // anchor by left/top
+    drag={dx:e.clientX-r.left, dy:e.clientY-r.top, w:r.width};
+    el.classList.add('dragging','moved');
+    try{ handle.setPointerCapture(e.pointerId); }catch(_){}
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', e=>{
+    if(!drag) return;
+    let nx=e.clientX-drag.dx, ny=e.clientY-drag.dy;
+    nx=Math.max(8-drag.w+90, Math.min(nx, innerWidth-90));
+    ny=Math.max(8,           Math.min(ny, innerHeight-44));
+    el.style.left=nx+'px'; el.style.top=ny+'px';
+  });
+  const end=e=>{ if(drag){ drag=null; el.classList.remove('dragging');
+    try{ handle.releasePointerCapture(e.pointerId); }catch(_){} } };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+}
+['ctrl','tele'].forEach(makeBoardDraggable);
+$('resetLayout').addEventListener('click', resetBoards);
 
 async function checkBackend(){
   try{ const r=await fetch('/api/status'); showOffline(!r.ok); }
@@ -544,7 +1184,144 @@ initScene();
 checkBackend().then(()=>{
   if(location.search.includes('autorun')) runMission();
   if(location.search.includes('selftest')) selfTest();
+  if(location.search.includes('camtest')) camTest();
+  // dev hook: fire a deliberately out-of-range target to show the honest reject
+  if(location.search.includes('unreach')){ $('target_range').value=100000; runMission(); }
+  // dev hook: run a mission then frame close to the tank (or target) so the 3D
+  // models are inspectable in a screenshot. ?closeup or ?closeup=target
+  if(location.search.includes('closeup')) closeupView(location.search.includes('target')?'target':'gun');
+  if(location.search.includes('clicktest')) clickTest();
+  if(location.search.includes('ui3test')) ui3Test();
+  if(location.search.includes('r5test')) r5Test();
+  if(location.search.includes('r5demo')) r5Demo();
 });
+// dev: run a raised-target mission to completion, turn on the weather overlay,
+// and show the summary — for a screenshot of the Round-5 viz layers together.
+async function r5Demo(){
+  $('target_height_m').value = 600;
+  await runMission(); finishAim();
+  let t=play?play.last:performance.now();
+  for(let i=0;i<2000 && !(play&&play.done);i++){ t+=200; if(play)play.pause=0; stepMission(t); }
+  await toggleWeather(true);
+  fillSummary(); $('summary').style.display='block';
+  frame('persp');
+}
+
+// QA hook (inert unless ?r5test): atmosphere toggle + labels, altitude indicator,
+// mission summary + shot comparison, and the real weather overlay (arrows).
+async function r5Test(){
+  const out=[];
+  try{
+    const a0=bands.visible; $('tglAtmo').click(); const a1=bands.visible; $('tglAtmo').click();
+    out.push('atmoToggle='+(a0!==a1 && bands.visible===a0));
+    out.push('atmoLabels='+(!!bandLabels && bandLabels._items.length>0));
+    buildBattlefield(22000,4000,650,8);            // raised target -> altitude indicator
+    out.push('altInd='+(!!altIndicator && altIndicator.children.length>=2));
+    await runMission(); finishAim();
+    let t=play?play.last:performance.now();
+    for(let i=0;i<2000 && !(play&&play.done);i++){ t+=200; if(play)play.pause=0; stepMission(t); }
+    fillSummary();
+    const shots=$('sm-shots').querySelectorAll('tr').length;
+    out.push('summaryShots='+(shots===mission.mission.rounds_fired)+'('+shots+')');
+    out.push('insight='+($('sumInsight').textContent.includes('learned')));
+    out.push('summaryShown='+(($('summary').style.display||'')==='block'));
+    await toggleWeather(true);
+    const arrows = weatherGroup ? weatherGroup.children.filter(c=>c instanceof THREE.ArrowHelper).length : 0;
+    out.push('weatherArrows='+(arrows>0)+'('+arrows+')');
+    document.title='R5TEST | '+out.join(' | ');
+  }catch(e){ document.title='R5TEST | ERR '+e.message; }
+}
+
+// QA hook (inert unless ?ui3test): board drag stays on-screen + reset works, and
+// the target distance rings exist and fade in as the camera moves close.
+function ui3Test(){
+  try{
+    const el=$('tele'), h=el.querySelector('.ttl'), r0=el.getBoundingClientRect();
+    const ev=(t,x,y)=>h.dispatchEvent(new PointerEvent(t,{button:0,clientX:x,clientY:y,bubbles:true,pointerId:1}));
+    ev('pointerdown', r0.left+30, r0.top+8);
+    ev('pointermove', r0.left-260, r0.top+200);            // try to drag far left + down
+    ev('pointerup',   r0.left-260, r0.top+200);
+    const r1=el.getBoundingClientRect();
+    const boardMoved = Math.abs(r1.left-r0.left)>40 || Math.abs(r1.top-r0.top)>40;
+    const onScreen = (r1.left+r1.width)>50 && r1.left<innerWidth-50 && r1.top>=0 && r1.top<innerHeight-30;
+    resetBoards(); const r2=el.getBoundingClientRect();
+    const resetOk = Math.abs(r2.top-r0.top)<4;
+    const markers = !!targetMarkers && targetMarkers._mats.length===TARGET_RING_RADII_M.length;
+    frame('persp'); updateTargetMarkers(); const fadeFar = targetMarkers._mats[0].opacity;
+    const tp=targetMarkers.position.clone();
+    camera.position.set(tp.x+5, tp.y+5, tp.z+5); controls.target.copy(tp); controls.update();
+    updateTargetMarkers(); const fadeNear = targetMarkers._mats[0].opacity;
+    const fadeOk = fadeNear>fadeFar && fadeFar<0.05 && fadeNear>0.2;
+    document.title='UI3TEST | boardMoved='+boardMoved+' onScreen='+onScreen+' resetOk='+resetOk
+      +' markers='+markers+' fadeFar='+fadeFar.toFixed(2)+' fadeNear='+fadeNear.toFixed(2)+' fadeOk='+fadeOk
+      +' minDist='+controls.minDistance.toFixed(2)+' resizable='+(getComputedStyle(el).resize==='both');
+  }catch(e){ document.title='UI3TEST | ERR '+e.message; }
+}
+
+// QA hook (inert unless ?clicktest): a non-drag ground click updates the
+// range/bearing inputs to the clicked physics position; a drag does not.
+function clickTest(){
+  try{
+    const cv = renderer.domElement, rect = cv.getBoundingClientRect();
+    const px = rect.left + rect.width*0.58, py = rect.top + rect.height*0.56;
+    const pd=(x,y)=>cv.dispatchEvent(new PointerEvent('pointerdown',{button:0,clientX:x,clientY:y,bubbles:true}));
+    const pu=(x,y)=>cv.dispatchEvent(new PointerEvent('pointerup',{button:0,clientX:x,clientY:y,bubbles:true}));
+    const before = $('target_range').value;
+    pd(px,py); pu(px,py);                                   // a click -> place
+    const placedR = $('target_range').value, placedB = $('target_bearing').value;
+    const placed = placedR !== before && +placedR > 0;
+    const dragBeforeR = $('target_range').value;
+    pd(px,py); pu(px+50, py+12);                            // a drag -> must NOT place
+    const dragPlaced = $('target_range').value !== dragBeforeR;
+    document.title='CLICKTEST | placed='+placed+' range='+placedR+' bearing='+placedB
+      +' dragIgnored='+(!dragPlaced);
+  }catch(e){ document.title='CLICKTEST | ERR '+e.message; }
+}
+function closeupView(which){            // fetch-free: pose the turret + frame the model
+  aimBearingDeg = +$('target_bearing').value || 0;
+  buildBattlefield(22000, 4000, 0, 8);                 // fresh default scene (tank + target)
+  startAim(aimBearingDeg, 48, null); finishAim();      // elevate the barrel into the aimed pose
+  const R = 22000*WORLD;
+  if(which==='target'){
+    const t = mapAimed(22000, 0, 0); controls.target.copy(t);
+    camera.position.set(t.x - R*0.045, t.y + R*0.03, t.z + R*0.055);
+  } else {
+    controls.target.set(0, R*0.012, 0);
+    camera.position.set(-R*0.05, R*0.04, R*0.06);
+  }
+  camera.updateProjectionMatrix(); controls.update();
+}
+
+// QA hook (inert unless ?camtest=1): exercise the camera controls deterministically
+// on the default scene (no mission/fetch needed) and report via the document title:
+// cursor-zoom in/out, the orbit pivot following an off-centre cursor, pan mapping,
+// and the zoom distance clamps.
+function camTest(){
+  try{
+    const cv = renderer.domElement, rect = cv.getBoundingClientRect();
+    const wheelAt=(px,py,dy)=>cv.dispatchEvent(new WheelEvent('wheel',
+      {clientX:px, clientY:py, deltaY:dy, bubbles:true, cancelable:true}));
+    const cxp=rect.left+rect.width/2, cyp=rect.top+rect.height/2;
+    const d0=camera.position.distanceTo(controls.target);
+    wheelAt(cxp, cyp, -400);  const dIn=camera.position.distanceTo(controls.target);
+    wheelAt(cxp, cyp,  800);  const dOut=camera.position.distanceTo(controls.target);
+    const tb=controls.target.clone();
+    wheelAt(rect.left+rect.width*0.72, rect.top+rect.height*0.58, -400);
+    const targetFollows=controls.target.distanceTo(tb)>1e-3;
+    for(let i=0;i<80;i++) wheelAt(cxp, cyp, -600);
+    const dMin=camera.position.distanceTo(controls.target);
+    for(let i=0;i<120;i++) wheelAt(cxp, cyp, 600);
+    const dMax=camera.position.distanceTo(controls.target);
+    document.title='CAMTEST | zoomIn='+(dIn<d0-1e-3)+' zoomOut='+(dOut>dIn+1e-3)
+      +' targetFollows='+targetFollows
+      +' panRight='+(controls.mouseButtons.RIGHT===THREE.MOUSE.PAN)
+      +' panShift='+(controls.enablePan===true)
+      +' wheelOwned='+(controls.enableZoom===false)
+      +' minClamp='+(Math.abs(dMin-controls.minDistance)<0.6)
+      +' maxClamp='+(Math.abs(dMax-controls.maxDistance)<1.5)
+      +' noUnderGround='+(controls.maxPolarAngle<Math.PI/2);
+  }catch(e){ document.title='CAMTEST | ERR '+e.message; }
+}
 
 // QA hook (inert unless ?selftest=1): run a mission, wait for the animation to
 // reach the stop, and report outcome + scene contents via the document title.
@@ -553,15 +1330,31 @@ async function selfTest(){
   try{
     await runMission();
     if(!mission){ document.title='SIMTEST | FAIL offline'; return; }
+    finishAim();                              // snap the turret aim so playback can start
+    // the turret traversed/elevated to the REAL bearing + firing elevation
+    const wantYaw = -(mission.mission.target_bearing||0)*Math.PI/180;
+    const wantPitch = Math.max(0, mission.mission.elevation_deg||0)*Math.PI/180;
+    const turretAimed = tankTurret && tankBarrel
+      && Math.abs(tankTurret.rotation.y - wantYaw) < 1e-3
+      && Math.abs(tankBarrel.rotation.z - wantPitch) < 1e-3;
     manualDrive = true;                       // drive the animation deterministically
     let tnow = play.last;
     for(let i=0;i<2000 && !play.done;i++){ tnow += 200; play.pause = 0; stepMission(tnow); }
     if(location.search.includes('view2d')) setView('2d');
     const arcs = missionGroup.children.filter(c=>c.type==='Line').length;
     const impacts = missionGroup.children.filter(c=>c.geometry && c.geometry.type==='CircleGeometry').length;
+    // Fix 1 check: the LAST drawn round's arc end (converted back to physical
+    // metres) should coincide with its impact and sit on the target marker.
+    const lastRd = mission.rounds[mission.rounds.length-1];
+    const endP = lastRd.scenePts[lastRd.scenePts.length-1];
+    const endDr = endP.x/WORLD, endCr = endP.z/WORLD;
+    const gapToTarget = Math.hypot(endDr - mission.mission.target_range, endCr).toFixed(1);
+    const scaleLabels = scaleGroup ? scaleGroup.children.filter(c=>c.type==='Sprite').length : 0;
     document.title='SIMTEST | destroyed='+mission.mission.destroyed
       +' round='+mission.mission.destroying_round
       +' rounds='+mission.mission.rounds_fired+' arcs='+arcs+' impacts='+impacts
+      +' arcEndToTarget_m='+gapToTarget+' lethal='+mission.mission.lethal_radius_m
+      +' scaleLabels='+scaleLabels+' tank='+(!!tankTurret)+' turretAimed='+turretAimed
       +' banner='+$('banner').classList.contains('show')
       +' gunEst='+mission.learned.gun_bias_est.map(x=>x.toFixed(0)).join(',');
   }catch(e){ document.title='SIMTEST | ERR '+e.message; }
